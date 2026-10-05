@@ -1,0 +1,52 @@
+device_id: ups-01
+device_type: UPS
+manufacturer: APC
+model: SURT10000XLI
+nominal_kva: 10
+modbus:
+  protocol: TCP
+  slave_id: 1
+  port: 5020
+registers:
+  - name: input_voltage_v
+    address: 0
+    scale: 0.1
+    unit: V
+    description: AC input voltage
+    normal_range: [380, 420]
+    alarm_high: 440
+    alarm_low: 360
+  - name: output_voltage_v
+    address: 1
+    scale: 0.1
+    unit: V
+    description: AC output voltage
+    normal_range: [395, 405]
+    alarm_high: 420
+    alarm_low: 380
+  - name: load_pct
+    address: 2
+    scale: 0.1
+    unit: "%"
+    description: Output load percentage
+    normal_range: [0, 80]
+    alarm_high: 90
+    alarm_critical: 95
+  - name: battery_pct
+    address: 3
+    scale: 0.1
+    unit: "%"
+    description: Battery state of charge
+    normal_range: [80, 100]
+    alarm_low: 50
+    alarm_critical: 20
+  - name: status_code
+    address: 4
+    scale: 1
+    unit: enum
+    description: Operating status
+    enum_map:
+      0: ON_LINE
+      1: ON_BATTERY
+      2: BYPASS
+      3: FAULT

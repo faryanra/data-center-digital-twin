@@ -1,0 +1,18 @@
+# Rename to terraform.tfvars and fill in values before running terraform apply.
+# NEVER commit terraform.tfvars — it is listed in .gitignore.
+
+aws_region  = "eu-north-1"
+app_name    = "dc-north-01"
+environment = "production"
+image_tag   = "latest"
+
+# Generate with: openssl rand -base64 32
+db_password  = "REPLACE_WITH_STRONG_PASSWORD"
+jwt_secret   = "REPLACE_WITH_32_CHAR_MINIMUM_SECRET"
+
+# Leave empty if not using InfluxDB
+influx_token = ""
+
+# Leave empty to use the ALB DNS name as the base URL
+# Set to your custom domain if you have one (e.g. "dc-twin.example.com")
+domain_name  = ""

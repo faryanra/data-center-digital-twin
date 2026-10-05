@@ -1,0 +1,42 @@
+device_id: generator-01
+device_type: GENERATOR
+manufacturer: Caterpillar
+model: XQE500
+rated_kva: 500
+fuel_type: diesel
+modbus:
+  protocol: TCP
+  slave_id: 4
+  port: 5020
+registers:
+  - name: state_code
+    address: 0
+    scale: 1
+    unit: enum
+    description: ATS/generator operating state
+    enum_map:
+      0: STANDBY
+      1: STARTING
+      2: TRANSFERRED
+      3: RECOVERY
+      4: FAULT
+  - name: output_kw
+    address: 1
+    scale: 0.1
+    unit: kW
+    description: Generator output power
+  - name: frequency_hz
+    address: 2
+    scale: 0.01
+    unit: Hz
+    description: Output frequency
+    normal_range: [49.8, 50.2]
+    alarm_high: 50.5
+    alarm_low: 49.5
+  - name: fuel_level_pct
+    address: 3
+    scale: 0.1
+    unit: "%"
+    description: Fuel tank level
+    alarm_low: 25
+    alarm_critical: 10

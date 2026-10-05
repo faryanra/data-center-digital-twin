@@ -1,0 +1,12 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: dctwin
+data:
+  DATABASE_URL: "postgresql+asyncpg://dctwin:CHANGE_ME_IN_PRODUCTION@postgres:5432/dctwin"
+  MODBUS_HOST: "0.0.0.0"
+  MODBUS_PORT: "5020"
+  LOG_LEVEL: "INFO"
+  SIMULATION_TICK_S: "5"

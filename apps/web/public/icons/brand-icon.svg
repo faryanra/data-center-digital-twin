@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="24" fill="#0A0A0A"/>
+  <path d="M44 44H74L96 118V44H128V148H98L76 74V148H44V44Z"
+        fill="white"/>
+  <!-- Server rack dots for data center context -->
+  <circle cx="148" cy="60" r="5" fill="#4ADE80" opacity="0.9"/>
+  <circle cx="148" cy="80" r="5" fill="#4ADE80" opacity="0.7"/>
+  <circle cx="148" cy="100" r="5" fill="#FCD34D" opacity="0.8"/>
+  <circle cx="148" cy="120" r="5" fill="#6B7280" opacity="0.5"/>
+</svg>

@@ -1,0 +1,38 @@
+device_id: crah-a
+device_type: CRAH
+manufacturer: Stulz
+model: CyberAir 3PRO
+cooling_capacity_kw: 50
+modbus:
+  protocol: TCP
+  slave_id: 3
+  port: 5020
+registers:
+  - name: supply_temp_c
+    address: 0
+    scale: 0.1
+    unit: "°C"
+    description: Cold aisle supply temperature
+    setpoint: 18.0
+    normal_range: [16, 22]
+    alarm_high: 24
+    alarm_critical: 27
+  - name: return_temp_c
+    address: 1
+    scale: 0.1
+    unit: "°C"
+    description: Hot aisle return temperature
+    normal_range: [22, 35]
+    alarm_high: 38
+    alarm_critical: 42
+  - name: cooling_kw
+    address: 2
+    scale: 0.1
+    unit: kW
+    description: Active cooling power output
+  - name: fan_speed_pct
+    address: 3
+    scale: 0.1
+    unit: "%"
+    description: Supply fan speed
+    normal_range: [30, 100]

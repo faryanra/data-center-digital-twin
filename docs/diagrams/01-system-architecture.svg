@@ -1,0 +1,75 @@
+<svg viewBox="0 0 840 600" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Roboto,sans-serif">
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="7.5" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#94A3B8"/>
+    </marker>
+  </defs>
+
+  <rect x="0.5" y="0.5" width="839" height="599" rx="10" fill="#FAFBFC" stroke="#E5E7EB"/>
+  <text x="28" y="40" font-size="17" font-weight="700" fill="#374151">System Architecture</text>
+
+  <!-- Browser -->
+  <rect x="320" y="70" width="200" height="54" rx="9" fill="#E8F1FF" stroke="#2563EB" stroke-width="1.5"/>
+  <text x="420" y="103" text-anchor="middle" font-size="16" font-weight="600" fill="#1D4ED8">Browser</text>
+
+  <line x1="420" y1="124" x2="420" y2="166" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#ah)"/>
+  <text x="432" y="150" font-size="12.5" fill="#64748B">HTTPS / WSS</text>
+
+  <!-- Next.js -->
+  <rect x="310" y="168" width="220" height="58" rx="9" fill="#E8F1FF" stroke="#2563EB" stroke-width="1.5"/>
+  <text x="420" y="203" text-anchor="middle" font-size="16" font-weight="600" fill="#1D4ED8">Next.js</text>
+
+  <line x1="420" y1="226" x2="420" y2="268" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#ah)"/>
+  <text x="432" y="252" font-size="12.5" fill="#64748B">proxy</text>
+
+  <!-- FastAPI -->
+  <rect x="295" y="270" width="250" height="60" rx="9" fill="#E7F6EC" stroke="#16A34A" stroke-width="1.5"/>
+  <text x="420" y="306" text-anchor="middle" font-size="16" font-weight="600" fill="#15803D">FastAPI</text>
+
+  <!-- FastAPI to bus -->
+  <line x1="420" y1="330" x2="420" y2="372" stroke="#94A3B8" stroke-width="1.6"/>
+  <!-- distribution bus -->
+  <line x1="140" y1="372" x2="710" y2="372" stroke="#CBD5E1" stroke-width="1.6"/>
+
+  <!-- bus drops -->
+  <line x1="140" y1="372" x2="140" y2="408" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#ah)"/>
+  <line x1="330" y1="372" x2="330" y2="408" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#ah)"/>
+  <line x1="520" y1="372" x2="520" y2="408" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#ah)"/>
+  <line x1="710" y1="372" x2="710" y2="408" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#ah)"/>
+
+  <!-- PostgreSQL -->
+  <rect x="60" y="410" width="160" height="56" rx="9" fill="#F1EAFE" stroke="#8B5CF6" stroke-width="1.5"/>
+  <text x="140" y="444" text-anchor="middle" font-size="15" font-weight="600" fill="#6D28D9">PostgreSQL</text>
+
+  <!-- MQTT -->
+  <rect x="250" y="410" width="160" height="56" rx="9" fill="#FFF1E6" stroke="#EA580C" stroke-width="1.5"/>
+  <text x="330" y="444" text-anchor="middle" font-size="15" font-weight="600" fill="#C2410C">MQTT</text>
+
+  <!-- Modbus -->
+  <rect x="440" y="410" width="160" height="56" rx="9" fill="#FFF1E6" stroke="#EA580C" stroke-width="1.5"/>
+  <text x="520" y="444" text-anchor="middle" font-size="15" font-weight="600" fill="#C2410C">Modbus TCP</text>
+
+  <!-- Prometheus -->
+  <rect x="630" y="410" width="160" height="56" rx="9" fill="#EEF0F2" stroke="#64748B" stroke-width="1.5"/>
+  <text x="710" y="444" text-anchor="middle" font-size="15" font-weight="600" fill="#475569">Prometheus</text>
+
+  <line x1="710" y1="466" x2="710" y2="500" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#ah)"/>
+
+  <!-- Grafana -->
+  <rect x="630" y="502" width="160" height="52" rx="9" fill="#EEF0F2" stroke="#64748B" stroke-width="1.5"/>
+  <text x="710" y="534" text-anchor="middle" font-size="15" font-weight="600" fill="#475569">Grafana</text>
+
+  <!-- Legend -->
+  <g font-size="12.5" fill="#64748B">
+    <rect x="28"  y="568" width="12" height="12" rx="2" fill="#E8F1FF" stroke="#2563EB"/>
+    <text x="46"  y="578">Frontend</text>
+    <rect x="128" y="568" width="12" height="12" rx="2" fill="#E7F6EC" stroke="#16A34A"/>
+    <text x="146" y="578">Backend</text>
+    <rect x="222" y="568" width="12" height="12" rx="2" fill="#F1EAFE" stroke="#8B5CF6"/>
+    <text x="240" y="578">Database</text>
+    <rect x="318" y="568" width="12" height="12" rx="2" fill="#FFF1E6" stroke="#EA580C"/>
+    <text x="336" y="578">Protocols</text>
+    <rect x="416" y="568" width="12" height="12" rx="2" fill="#EEF0F2" stroke="#64748B"/>
+    <text x="434" y="578">Observability</text>
+  </g>
+</svg>

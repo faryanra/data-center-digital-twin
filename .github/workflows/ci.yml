@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+  api:
+    name: API
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          pip install -r services/api/requirements.txt --break-system-packages 2>/dev/null || pip install -r services/api/requirements.txt
+
+      - name: Lint
+        run: |
+          pip install ruff --break-system-packages 2>/dev/null || pip install ruff
+          PYTHONPATH=$PYTHONPATH:$GITHUB_WORKSPACE ruff check services/api
+
+      - name: Test
+        run: |
+          pip install pytest --break-system-packages 2>/dev/null || pip install pytest
+          PYTHONPATH=$GITHUB_WORKSPACE python -m pytest tests/test_alarm_manager.py tests/test_electrical_model.py -v --tb=short
+
+  simulation:
+    name: Simulation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          pip install -r requirements.txt --break-system-packages 2>/dev/null || pip install -r requirements.txt
+
+      - name: Test
+        run: |
+          pip install pytest --break-system-packages 2>/dev/null || pip install pytest
+          PYTHONPATH=$GITHUB_WORKSPACE python -m pytest tests/test_electrical_model.py -v --tb=short
+
+  simulation-tests:
+    name: Simulation E2E
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          pip install pytest --break-system-packages 2>/dev/null || pip install pytest
+          pip install -r services/api/requirements.txt --break-system-packages 2>/dev/null || pip install -r services/api/requirements.txt
+
+      - name: Run E2E scenario tests
+        working-directory: simulation
+        run: |
+          PYTHONPATH=$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/services/api python -m pytest tests/test_generator.py tests/test_scenarios_e2e.py -v --tb=short
+
+  api-integration-tests:
+    name: API Integration
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          pip install -r services/api/requirements.txt --break-system-packages 2>/dev/null || pip install -r services/api/requirements.txt
+          pip install httpx pytest pytest-asyncio anyio --break-system-packages 2>/dev/null || pip install httpx pytest pytest-asyncio anyio
+
+      - name: Run API integration tests
+        working-directory: services/api
+        run: |
+          PYTHONPATH=$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/services/api DATABASE_URL=sqlite+aiosqlite:///./test_dc.db python -m pytest tests/test_api_integration.py -v --tb=short

@@ -1,0 +1,6 @@
+[tool.ruff.lint]
+# B008: FastAPI Depends()/Query()/Path() in function defaults is the correct pattern
+# BLE001: broad except is intentional in broadcast loops and actuator error handlers
+# PLW0602: global declaration without assignment is legacy pattern in actuator services
+# UP030: explicit positional format fields are acceptable
+ignore = ["B008", "BLE001", "PLW0602", "UP030"]

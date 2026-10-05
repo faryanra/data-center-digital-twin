@@ -1,0 +1,54 @@
+site:
+  id: dc-north-01
+  name: DC-NORTH-01
+  location: Primary Site
+
+building:
+  id: dc-01
+  floors:
+    - id: floor-0
+      name: Level 0
+      rooms:
+        - id: electrical-room
+          name: Electrical Room
+          equipment: [main-switchgear-01, ups-01, ups-02]
+        - id: generator-room
+          name: Generator Room
+          equipment: [generator-01]
+        - id: cooling-plant
+          name: Cooling Plant
+          equipment: [chiller-01, chiller-02]
+
+    - id: floor-1
+      name: Level 1
+      rooms:
+        - id: data-hall-a
+          name: Data Hall A
+          equipment:
+            - crah-a01
+            - crah-a02
+            - rack-a01
+            - rack-a02
+            - rack-a03
+            - rack-a04
+            - rack-a05
+            - rack-a06
+            - rack-a07
+            - rack-a08
+            - rack-a09
+            - rack-a10
+        - id: data-hall-b
+          name: Data Hall B
+          equipment:
+            - crah-b01
+            - rack-b01
+            - rack-b02
+            - rack-b03
+            - rack-b04
+            - rack-b05
+            - rack-b06
+            - rack-b07
+            - rack-b08
+        - id: noc
+          name: NOC / Control Room
+          equipment: []

@@ -1,0 +1,34 @@
+device_id: pdu-a1
+device_type: PDU
+manufacturer: Raritan
+model: PX3-5161V
+phases: 3
+rated_current_a: 32
+modbus:
+  protocol: TCP
+  slave_id: 2
+  port: 5020
+registers:
+  - name: total_kw
+    address: 0
+    scale: 0.1
+    unit: kW
+    description: Total 3-phase active power
+    normal_range: [0, 15]
+    alarm_high: 20
+    alarm_critical: 25
+  - name: phase_a_kw
+    address: 1
+    scale: 0.1
+    unit: kW
+    description: Phase A active power
+  - name: phase_b_kw
+    address: 2
+    scale: 0.1
+    unit: kW
+    description: Phase B active power
+  - name: phase_c_kw
+    address: 3
+    scale: 0.1
+    unit: kW
+    description: Phase C active power

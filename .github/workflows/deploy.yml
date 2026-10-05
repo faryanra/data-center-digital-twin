@@ -1,0 +1,116 @@
+name: Deploy to AWS ECS
+
+on:
+  push:
+    branches: [main]
+
+# Requires these GitHub Actions secrets:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION (eu-north-1)
+#   ECR_BACKEND_URL, ECR_FRONTEND_URL
+#   ECS_CLUSTER, ECS_BACKEND_SERVICE, ECS_FRONTEND_SERVICE
+
+jobs:
+  build-push-backend:
+    name: Build & push backend
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push backend
+        env:
+          IMAGE: ${{ secrets.ECR_BACKEND_URL }}:${{ github.sha }}
+        run: |
+          docker build -t "$IMAGE" -f services/api/Dockerfile .
+          docker push "$IMAGE"
+          docker tag "$IMAGE" ${{ secrets.ECR_BACKEND_URL }}:latest
+          docker push ${{ secrets.ECR_BACKEND_URL }}:latest
+
+  build-push-frontend:
+    name: Build & push frontend
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push frontend
+        env:
+          IMAGE: ${{ secrets.ECR_FRONTEND_URL }}:${{ github.sha }}
+        run: |
+          docker build -t "$IMAGE" -f apps/web/Dockerfile apps/web
+          docker push "$IMAGE"
+          docker tag "$IMAGE" ${{ secrets.ECR_FRONTEND_URL }}:latest
+          docker push ${{ secrets.ECR_FRONTEND_URL }}:latest
+
+  deploy:
+    name: Update ECS services
+    runs-on: ubuntu-latest
+    needs: [build-push-backend, build-push-frontend]
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Force new backend deployment
+        run: |
+          aws ecs update-service \
+            --cluster "${{ secrets.ECS_CLUSTER }}" \
+            --service "${{ secrets.ECS_BACKEND_SERVICE }}" \
+            --force-new-deployment \
+            --query 'service.deployments[0].{status:status,desired:desiredCount,running:runningCount}' \
+            --output json
+
+      - name: Force new frontend deployment
+        run: |
+          aws ecs update-service \
+            --cluster "${{ secrets.ECS_CLUSTER }}" \
+            --service "${{ secrets.ECS_FRONTEND_SERVICE }}" \
+            --force-new-deployment \
+            --query 'service.deployments[0].{status:status,desired:desiredCount,running:runningCount}' \
+            --output json
+
+      - name: Wait for backend to stabilize
+        run: |
+          aws ecs wait services-stable \
+            --cluster "${{ secrets.ECS_CLUSTER }}" \
+            --services "${{ secrets.ECS_BACKEND_SERVICE }}"
+
+      - name: Wait for frontend to stabilize
+        run: |
+          aws ecs wait services-stable \
+            --cluster "${{ secrets.ECS_CLUSTER }}" \
+            --services "${{ secrets.ECS_FRONTEND_SERVICE }}"

@@ -1,0 +1,8 @@
+cherrypy
+paho-mqtt
+requests
+fastapi
+uvicorn[standard]
+psycopg[binary]
+slowapi>=0.1.9
+prometheus-fastapi-instrumentator>=6.1.0
