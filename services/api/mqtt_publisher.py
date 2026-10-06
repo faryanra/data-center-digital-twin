@@ -7,9 +7,11 @@ Topics (QoS 0, retained):
   dc/thermal/summary     — {supply_temp_c, return_temp_c, total_cooling_kw, per_hall, ts}
 """
 from __future__ import annotations
+
 import json
 import logging
 import time
+
 import paho.mqtt.client as mqtt
 
 logger = logging.getLogger(__name__)

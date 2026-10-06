@@ -1,16 +1,18 @@
 from __future__ import annotations
+
 import asyncio
 import os
 import sys
 from logging.config import fileConfig
 
 from sqlalchemy.ext.asyncio import create_async_engine
+
 from alembic import context
 
 # Allow importing from services/api
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Base, DATABASE_URL  # noqa: E402
+from database import DATABASE_URL, Base
 
 config = context.config
 if config.config_file_name is not None:

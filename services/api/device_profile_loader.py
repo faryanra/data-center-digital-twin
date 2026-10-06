@@ -3,8 +3,10 @@ Loads device register profiles from YAML files in config/device_profiles/.
 Provides register metadata and threshold validation for Modbus register values.
 """
 from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
+
 import yaml
 
 _PROFILES_DIR = Path(__file__).parent.parent.parent / "config" / "device_profiles"
@@ -51,9 +53,7 @@ def validate_register_value(
 
     if "alarm_critical" in meta and scaled >= meta["alarm_critical"]:
         status = "CRITICAL"
-    elif "alarm_high" in meta and scaled >= meta["alarm_high"]:
-        status = "WARNING"
-    elif "alarm_low" in meta and scaled <= meta["alarm_low"]:
+    elif "alarm_high" in meta and scaled >= meta["alarm_high"] or "alarm_low" in meta and scaled <= meta["alarm_low"]:
         status = "WARNING"
 
     result: dict[str, Any] = {"value": scaled, "unit": unit, "status": status}

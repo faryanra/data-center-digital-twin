@@ -1,8 +1,11 @@
 """SQLAlchemy ORM models."""
 from __future__ import annotations
+
 import datetime
-from sqlalchemy import String, DateTime, Text, Index, func
+
+from sqlalchemy import DateTime, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
+
 from database import Base
 
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
+
 import datetime
-from datetime import timezone
 import logging
-from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import timezone
+
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from models_db import AlarmRecord
 
 logger = logging.getLogger(__name__)

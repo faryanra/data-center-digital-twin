@@ -187,3 +187,20 @@ production Docker Compose overlay.
 The reasoning behind each major choice — the monorepo, WebSocket over SSE, the pure-Python
 tick, and the Modbus register layout — is written up as Architecture Decision Records in
 [`docs/adr/`](docs/adr/).
+
+---
+
+## Author
+
+**Faryan Rajabi** — frontend & dashboard engineer, MSc student at Politecnico di Torino.
+
+- LinkedIn: [linkedin.com/in/faryan-rajabi](https://www.linkedin.com/in/faryan-rajabi)
+- GitHub: [github.com/faryanra](https://github.com/faryanra)
+
+---
+
+## License
+
+Released under the MIT License. See [`LICENSE`](LICENSE) for the full text.
+
+© 2026 Faryan Rajabi.

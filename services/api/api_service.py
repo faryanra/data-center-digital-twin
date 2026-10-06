@@ -18,12 +18,12 @@ sys.path.insert(0, _HERE)
 from simulation.electrical.facility_sim import FacilitySimulator
 
 from alarm_evaluator import evaluate as evaluate_alarms
+from alarm_persistence import query_alarm_history
 from alarms import AlarmManager
+from database import AsyncSessionLocal, init_db
+from device_profile_loader import load_all_profiles
 from modbus_gateway import run_modbus_server, update_registers_from_snapshot
 from mqtt_publisher import init_mqtt, publish_snapshot, shutdown_mqtt
-from device_profile_loader import load_all_profiles
-from database import init_db, AsyncSessionLocal
-from alarm_persistence import upsert_alarm, query_alarm_history
 
 _sim = FacilitySimulator()
 _alarm_mgr = AlarmManager()
@@ -101,7 +101,8 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-from facility_history import record as record_history, history as get_facility_history
+from facility_history import history as get_facility_history
+from facility_history import record as record_history
 
 
 def _snapshot_to_dict(snap) -> dict:  # type: ignore[no-untyped-def]
@@ -125,7 +126,7 @@ def _snapshot_to_dict(snap) -> dict:  # type: ignore[no-untyped-def]
                     if pdu.racks else 0.0,
                     1,
                 ),
-                "crah_online": snap.cooling.crah_online_count if "hall-a" in pdu.location else snap.cooling.crah_online_count,
+                "crah_online": snap.cooling.crah_online_count,
                 "crah_total": snap.cooling.crah_total_count,
                 "rack_count": len(pdu.racks),
             }
@@ -408,7 +409,8 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
         gauge_task = asyncio.create_task(_update_platform_gauges(database))
         sim_task = asyncio.create_task(sim_broadcast_loop())
 
-        from snmp_poller import init_snmp_devices, poll_loop as snmp_poll_loop
+        from snmp_poller import init_snmp_devices
+        from snmp_poller import poll_loop as snmp_poll_loop
         init_snmp_devices()
         snmp_task = asyncio.create_task(snmp_poll_loop(30))
 
@@ -944,9 +946,10 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
 
     # ----- users (admin) -----
 
-    import bcrypt as _bcrypt
-    import uuid as _uuid
     import time as _time
+    import uuid as _uuid
+
+    import bcrypt as _bcrypt
 
     _users_store: list[dict] = [
         {

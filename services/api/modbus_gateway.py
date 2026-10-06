@@ -27,15 +27,16 @@ Register map (all holding registers, function code 3):
 """
 
 from __future__ import annotations
-import asyncio
+
 import logging
+
 from pymodbus.datastore import (
-    ModbusSlaveContext,
-    ModbusServerContext,
     ModbusSequentialDataBlock,
+    ModbusServerContext,
+    ModbusSlaveContext,
 )
-from pymodbus.server import StartAsyncTcpServer
 from pymodbus.device import ModbusDeviceIdentification
+from pymodbus.server import StartAsyncTcpServer
 
 logger = logging.getLogger(__name__)
 

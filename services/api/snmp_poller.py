@@ -38,7 +38,7 @@ class SnmpDevice:
 
     async def poll(self) -> dict:
         try:
-            from puresnmp import Client, V2C  # deferred — optional dependency
+            from puresnmp import V2C, Client  # deferred — optional dependency
         except ImportError:
             self.error = "puresnmp not installed"
             return self.last_values

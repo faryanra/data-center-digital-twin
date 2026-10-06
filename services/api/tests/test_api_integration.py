@@ -1,6 +1,7 @@
 """API integration tests using httpx AsyncClient against a real FastAPI instance."""
-import sys
 import os
+import sys
+
 import pytest
 import pytest_asyncio
 
@@ -10,7 +11,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 # Use in-memory SQLite for tests
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
+
 from api_service import app
 
 
@@ -19,8 +21,17 @@ def anyio_backend():
     return "asyncio"
 
 
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def _init_schema():
+    # The ASGI test transport does not run the app's lifespan, so create the
+    # database schema (alarms table, etc.) explicitly before any request.
+    from database import init_db
+    await init_db()
+    yield
+
+
 @pytest_asyncio.fixture(scope="session")
-async def client():
+async def client(_init_schema):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
