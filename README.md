@@ -8,9 +8,9 @@ A real-time simulation and monitoring platform for a Tier-III data centre, built
 |---|---|
 | ![Dashboard](docs/screenshots/01-dashboard.png) | ![Energy](docs/screenshots/02-energy.png) |
 
-| Equipment inventory | |
+| Equipment inventory | Electrical topology |
 |---|---|
-| ![Equipment](docs/screenshots/03-equipment.png) | |
+| ![Equipment](docs/screenshots/03-equipment.png) | ![Topology](docs/screenshots/04-topology.png) |
 
 ## What It Monitors
 
@@ -22,26 +22,71 @@ The same snapshot updates Modbus TCP holding registers on port 5020, so any stan
 
 ## Architecture
 
+### System Architecture
+
+```mermaid
+flowchart TD
+    Browser["Browser (PWA)"] --> Next["Next.js 16 · App Router :3000"]
+    Next --> Proxy["/api/proxy/[...path]"]
+    Proxy --> FastAPI["FastAPI :8000"]
+
+    FastAPI --> WS["WebSocket /ws/facility\n5-second tick"]
+    FastAPI --> Modbus["Modbus TCP :5020\n4 slaves · 6 registers each"]
+    FastAPI --> PG["PostgreSQL\nalarms · sensors · users"]
+    FastAPI --> Influx["InfluxDB\ntime-series (optional)"]
+
+    subgraph Simulator
+        WS --> Sim["FacilitySimulator\ntick() every 5 s"]
+        Sim --> Snap["FacilitySnapshot\ntyped dataclass"]
+        Snap --> WS
+        Snap --> Modbus
+    end
 ```
-Browser (PWA)
-└── Next.js 16 (App Router)  :3000
-    └── /api/proxy/[...path] → FastAPI  :8000
-        ├── WebSocket /ws/facility  (5 s tick)
-        ├── Modbus TCP  :5020  (4 slaves, local/Docker only)
-        ├── PostgreSQL  (alarms, sensors, users)
-        └── InfluxDB  (time-series, optional)
+
+### Simulation State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> NORMAL : startup
+
+    state UPS {
+        NORMAL --> BATTERY : mains loss
+        BATTERY --> NORMAL : mains restored
+        BATTERY --> BYPASS  : maintenance
+        BYPASS  --> NORMAL  : bypass off
+        NORMAL  --> FAULT   : overload / fault
+        FAULT   --> NORMAL  : reset
+    }
+
+    state Generator {
+        STANDBY --> STARTING    : ATS triggers (mains lost)
+        STARTING --> TRANSFERRED : engine ready
+        TRANSFERRED --> RECOVERY : mains restored
+        RECOVERY --> STANDBY    : cooldown complete
+    }
 ```
 
-| Decision | Rationale |
-|---|---|
-| WebSocket over SSE | Bi-directional — fault injection from the UI needs a write channel |
-| Pure-Python `tick()` | Sub-millisecond, no async overhead; output is a typed dataclass |
-| Modbus TCP :5020 | Standard industrial protocol; any SCADA tool reads it without custom code |
-| `httpOnly` JWT cookie | XSS-resistant auth; proxy extracts role headers before forwarding to API |
+### Auth Flow
 
-## Auth Flow
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant Next as Next.js Server Action
+    participant JWT as jose (local)
+    participant FastAPI
 
-Login is handled entirely in Next.js via a server action — no FastAPI call during authentication. The server action validates credentials, signs a JWT (HS256, 8 h), and sets an `httpOnly` cookie. On subsequent requests the proxy decodes that cookie and forwards `X-User-Email` + `X-User-Role` headers to FastAPI. FastAPI uses `Depends(require_operator)` or `Depends(require_admin)` to enforce roles.
+    Browser->>Next: POST /login {email, password}
+    Next->>FastAPI: POST /auth/token
+    FastAPI-->>Next: {access_token, role}
+    Next->>JWT: sign HS256 (8 h)
+    JWT-->>Next: signed token
+    Next-->>Browser: Set-Cookie: auth_token (httpOnly)
+
+    Browser->>Next: GET /dashboard
+    Next->>JWT: verify cookie locally
+    JWT-->>Next: {email, role} — no backend call
+    Next-->>Browser: 200 with X-User-Role forwarded to FastAPI
+```
 
 ## Stack
 
@@ -102,6 +147,8 @@ pip install -r requirements.txt
 uvicorn api_service:app --reload --port 8000
 ```
 
+> **No PostgreSQL?** The backend automatically falls back to a local SQLite database if PostgreSQL is unreachable, so the simulator, WebSocket, and all in-memory features work without Docker.
+
 | Service | URL |
 |---|---|
 | Dashboard | http://localhost:3000 |
@@ -128,8 +175,8 @@ Port `5020` (local/Docker only — disabled on Render).
 | Variable | Required | Description |
 |---|---|---|
 | `JWT_SECRET` | ✅ | Random string ≥ 32 chars — never commit this |
-| `DATABASE_URL` | ✅ | `postgresql+asyncpg://user:pass@host/db` |
-| `POSTGRES_PASSWORD` | ✅ | PostgreSQL password |
+| `DATABASE_URL` | ☐ | `postgresql+asyncpg://user:pass@host/db` — omit to use SQLite fallback |
+| `POSTGRES_PASSWORD` | ☐ | PostgreSQL password (Docker only) |
 | `CORS_ORIGINS` | ✅ | Comma-separated allowed origins |
 | `NEXT_PUBLIC_API_URL` | ✅ | FastAPI base URL seen from the browser |
 | `NEXT_PUBLIC_WS_URL` | ✅ | WebSocket URL (`ws://` or `wss://`) |
