@@ -115,8 +115,8 @@ function ProgressBar({ pct }: { pct: number }) {
 
 function Metric({ value, label }: { value: string; label: string }) {
   return (
-    <div className="flex flex-col">
-      <span className="text-base font-bold text-[var(--text)]">{value}</span>
+    <div className="flex flex-col gap-1">
+      <span className="text-base font-bold leading-none text-[var(--text)]">{value}</span>
       <span className="text-[12px] text-[var(--muted)]">{label}</span>
     </div>
   );
