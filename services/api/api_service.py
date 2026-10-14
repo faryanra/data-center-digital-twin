@@ -388,9 +388,13 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
             host=os.getenv("MQTT_HOST", "localhost"),
             port=int(os.getenv("MQTT_PORT", "1883")),
         )
-        _modbus_task = asyncio.create_task(
-            run_modbus_server("0.0.0.0", int(os.getenv("MODBUS_PORT", "5020")))
-        )
+        # Modbus is only meaningful on local/Docker — skip on Render (RENDER env var is set automatically)
+        _is_render = bool(os.getenv("RENDER"))
+        _modbus_task = None
+        if not _is_render:
+            _modbus_task = asyncio.create_task(
+                run_modbus_server("127.0.0.1", int(os.getenv("MODBUS_PORT", "5020")))
+            )
 
         async def sim_broadcast_loop() -> None:
             while True:
@@ -415,7 +419,8 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
         snmp_task = asyncio.create_task(snmp_poll_loop(30))
 
         yield
-        _modbus_task.cancel()
+        if _modbus_task is not None:
+            _modbus_task.cancel()
         shutdown_mqtt()
         gauge_task.cancel()
         sim_task.cancel()

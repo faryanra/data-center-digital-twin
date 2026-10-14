@@ -1,206 +1,144 @@
 # DC-NORTH-01 — Data Center Digital Twin
 
-A real-time digital twin of a data center. It simulates the physical behaviour of the
-electrical and cooling plant, publishes that state over the same industrial protocols real
-hardware uses (Modbus TCP, MQTT), and drives a live operator dashboard where you can watch
-the facility, inject faults, and work the alarms — all without a single piece of physical
-equipment.
+[![CI](https://github.com/faryanra/data-center-digital-twin/actions/workflows/ci.yml/badge.svg)](https://github.com/faryanra/data-center-digital-twin/actions/workflows/ci.yml)
 
-The goal was to build the kind of monitoring platform that sits in a real data center NOC,
-end to end: a physics model at the bottom, industrial protocols in the middle, and a
-production-grade operator UI on top — and to make every layer open and replaceable instead
-of a black box.
+A real-time simulation and monitoring platform for a Tier-III data centre, built to demonstrate how digital-twin technology can support operations without requiring physical hardware.
 
----
+![System Architecture](docs/screenshots/01-system-architecture.svg)
 
-## What it is
+## What It Monitors
 
-Real facilities run on SCADA and building-management systems that are closed, expensive, and
-impossible to experiment with. DC-NORTH-01 reproduces that world in software:
+Every 5 seconds a physics-based simulation engine (`FacilitySimulator`) computes a `FacilitySnapshot` — power usage, cooling efficiency, PUE, generator state, per-hall temperatures, and active alarms — and broadcasts it over WebSocket to all connected dashboards simultaneously.
 
-- A **physics simulation** models power flow, cooling, and the generator transfer sequence of
-  a Tier-style facility (two data halls, UPS bank, PDUs, CRAH units, a standby generator).
-- The live state is exposed over **Modbus TCP** and **MQTT** — the exact interfaces a real
-  UPS, PDU, or meter speaks — so any SCADA tool or Modbus master can read it with no custom
-  integration.
-- A **FastAPI** backend turns that state into a REST + WebSocket API, evaluates alarms, and
-  exposes Prometheus metrics.
-- A **Next.js** operator dashboard shows PUE, load, per-hall cooling, equipment health, the
-  single-line diagram, and the alarm feed — updating live over one WebSocket.
+The same snapshot updates Modbus TCP holding registers on port 5020, so any standard SCADA tool can read live values without custom integration.
 
-Because the simulation and the real-hardware interface sit behind the same output contract,
-swapping the simulator for real sensors is an implementation detail, not a rewrite.
-
----
+**Facility model:** two data halls (Hall A: 10 racks, Hall B: 8 racks), UPS bank, PDU, two CRAH units, diesel generator with ATS.
 
 ## Architecture
 
-![System architecture](docs/diagrams/01-system-architecture.svg)
+![Simulation Engine](docs/screenshots/02-simulation-engine.svg)
 
-The browser talks only to Next.js. Next.js proxies every call to FastAPI over an internal
-network, so there is one origin, no CORS surface, and the backend is never exposed directly.
-FastAPI owns the simulation, persistence, alarm engine, and the protocol gateways.
+```
+Browser (PWA)
+└── Next.js 16 (App Router)  :3000
+    └── /api/proxy/[...path] → FastAPI  :8000
+        ├── WebSocket /ws/facility  (5 s tick)
+        ├── Modbus TCP  :5020  (4 slaves, local/Docker only)
+        ├── PostgreSQL  (alarms, sensors, users)
+        └── InfluxDB  (time-series, optional)
+```
 
----
-
-## The simulation engine
-
-![Simulation engine](docs/diagrams/02-simulation-engine.svg)
-
-A background loop calls `FacilitySimulator.tick()` every five seconds. One tick advances the
-whole facility — electrical load, thermal behaviour per hall, UPS and generator state — and
-returns a single typed `FacilitySnapshot`. That one object is the contract: the WebSocket
-broadcast, the MQTT publisher, the Modbus register map, and the alarm evaluator all read from
-it, so nothing can drift out of sync.
-
-The generator runs a real **automatic transfer switch (ATS)** state machine. On a utility
-loss it walks `STANDBY → STARTING → TRANSFERRED → RECOVERY → STANDBY` with realistic timing,
-and cooling is isolated per hall, so a CRAH trip in Hall A degrades Hall A only.
-
-### Fault scenarios
-
-Faults can be injected live from the dashboard (or the API) and clear the same way:
-
-| Scenario | What it does |
+| Decision | Rationale |
 |---|---|
-| **Utility loss** | Mains fails, UPS carries the load, generator auto-starts and transfers |
-| **CRAH trip** | A cooling unit drops, inlet temperatures in that hall climb, a thermal alarm raises |
-| **Rack overload** | Extra compute load raises power draw and heat, cascading through both models |
-| **Generator fail** | The standby generator fails to carry, exposing the UPS runtime limit |
+| WebSocket over SSE | Bi-directional — fault injection from the UI needs a write channel |
+| Pure-Python `tick()` | Sub-millisecond, no async overhead; output is a typed dataclass |
+| Modbus TCP :5020 | Standard industrial protocol; any SCADA tool reads it without custom code |
+| `httpOnly` JWT cookie | XSS-resistant auth; proxy extracts role headers before forwarding to API |
 
-Each fault propagates through the physics, shows up in the KPIs, trips the right alarms, and
-is visible in the single-line diagram — the same chain of cause and effect an operator would
-see for real.
+## Auth Flow
 
----
+![Auth Flow](docs/screenshots/03-auth-flow.svg)
 
-## Sensors and devices
+Login is handled entirely in Next.js via a server action — no FastAPI call during authentication. The server action validates credentials, signs a JWT (HS256, 8 h), and sets an `httpOnly` cookie. On subsequent requests the proxy decodes that cookie and forwards `X-User-Email` + `X-User-Role` headers to FastAPI. FastAPI uses `Depends(require_operator)` or `Depends(require_admin)` to enforce roles.
 
-The facility is instrumented the way a real one is — electrical, environmental, cooling, and
-safety points across both halls and the plant rooms:
-
-| Sensor | Unit | Protocol | Category |
-|---|---|---|---|
-| Rack inlet / outlet temperature | °C | SNMP / Modbus | Temperature |
-| Ambient temperature | °C | SNMP / Modbus | Temperature |
-| Relative humidity | % | SNMP / Modbus | Environment |
-| Power draw | kW | Modbus | Electrical |
-| Phase current | A | Modbus | Electrical |
-| Voltage | V | Modbus | Electrical |
-| Airflow | CFM | SNMP | Cooling |
-| UPS battery | % | SNMP | Power |
-| Smoke detector | — | Digital I/O | Safety |
-| Water-leak detector | — | Digital I/O | Safety |
-| Door contact | — | Digital I/O | Access |
-
-Electrical meters are exposed as **Modbus TCP** slaves with a fixed 6-register layout
-(voltage, current, power, energy, power factor, frequency). Environmental and power points
-also publish over **MQTT**, and the dashboard reads SNMP-style status for UPS and cooling.
-
----
-
-## Authentication and roles
-
-![Auth and request flow](docs/diagrams/03-auth-flow.svg)
-
-Login signs a JWT and stores it in an `httpOnly` cookie — not `localStorage`, so it is not
-reachable from JavaScript. Every protected call is proxied with the user's role, and the
-backend enforces it: `OPERATOR` can acknowledge alarms and issue control commands, `ADMIN`
-additionally manages users and clears alarms. Control endpoints are role-gated server-side,
-not just hidden in the UI.
-
----
-
-## Tech stack
+## Stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js 16 (App Router), React 19, TypeScript, Recharts |
-| Backend | FastAPI, Python 3.13, async SQLAlchemy |
-| Database | PostgreSQL 16 |
-| Protocols | Modbus TCP, MQTT (Mosquitto), SNMP, WebSocket |
-| Simulation | Pure-Python physics engine, typed snapshot contract |
-| Auth | JWT (`httpOnly` cookie), bcrypt, role-based access |
-| Observability | Prometheus metrics + Grafana dashboards |
-| Infrastructure | Docker Compose, Terraform (EC2 + ECS Fargate), Kubernetes manifests |
-| Quality | Playwright E2E, GitHub Actions CI (4 parallel jobs) |
-| PWA | Installable, offline-capable operator app |
+| Frontend | Next.js 16 (App Router), TypeScript |
+| Charts | Recharts — real-time area/bar charts |
+| Backend | FastAPI, Python 3.13, async |
+| Auth | JWT (jose), `httpOnly` cookie, bcrypt (user creation) |
+| Simulation | Pure Python dataclass — replaceable interface |
+| Database | PostgreSQL 16, SQLAlchemy async |
+| Industrial | Modbus TCP :5020, pymodbus 3.7 — 4 slaves, 6 registers each |
+| Messaging | Mosquitto MQTT :1883 (optional telemetry publish) |
+| Observability | Prometheus + Grafana — pre-provisioned dashboards |
+| Infra | Docker Compose (local), Terraform EC2 (cloud) |
+| PWA | Web App Manifest — installable on desktop and mobile |
 
----
+## Key Features
 
-## Quick start
+- **Real-time telemetry**: WebSocket at 5-second tick, rolling 40-point buffer, Recharts visualization
+- **Physics simulation**: UPS state machine (NORMAL/BATTERY/BYPASS/FAULT), Generator ATS (STANDBY → STARTING → TRANSFERRED → RECOVERY), CRAH cooling
+- **Electrical topology**: Live SLD diagram — grid → transformer → UPS → PDU → halls
+- **Multi-subsystem view**: Electrical · Fire Safety · Environment · Access Control
+- **Alarm management**: Active/Acknowledged/Cleared · Acknowledge and Clear (role-gated)
+- **Energy analytics**: 1H/6H/24H/7D range · PUE · IT load vs cooling breakdown
+- **Fault injection**: Trip CRAH, simulate mains loss, inject UPS overload (OPERATOR role)
+- **User management**: Add/remove accounts with role assignment (ADMIN only)
+- **Dark/light theme**: Flash-free toggle · CSS design tokens
+- **Skeleton loaders**: KPI · Table · Chart skeletons while WebSocket connects
 
-Requirements: Docker and Docker Compose.
+## Local Setup
 
 ```bash
+# 1. Start the full stack
 cp .env.example .env
-# set JWT_SECRET to a long random string before starting
-make up
+# Edit .env — set JWT_SECRET (≥32 chars) and POSTGRES_PASSWORD
+docker compose up --build
+
+# 2. Or run services separately
+# Terminal 1 — backend
+cd services/api
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn api_service:app --reload --port 8000
+
+# Terminal 3 — frontend
+cd apps/web && npm install && npm run dev
 ```
 
 | Service | URL |
 |---|---|
 | Dashboard | http://localhost:3000 |
 | API docs | http://localhost:8000/docs |
-| Grafana | http://localhost:3001 |
+| Grafana | http://localhost:3001 (admin / admin) |
 | Prometheus | http://localhost:9090 |
-| Modbus TCP | localhost:5020 |
+| Modbus | localhost:5020 |
 
-Frontend-only development:
+**Credentials:** `admin@datacenter.local` / `admin123` · `operator@datacenter.local` / `operator123`
 
-```bash
-cd apps/web
-npm install
-npm run dev
-```
+## Modbus Interface
 
----
+Port `5020` (local/Docker only — disabled on Render).
 
-## Repository layout
+| Slave | Device | Registers 0–5 |
+|---|---|---|
+| 1 | UPS | voltage, current, power, energy, power_factor, frequency |
+| 2 | PDU | voltage, current, power, energy, power_factor, frequency |
+| 3 | CRAH | inlet_temp, outlet_temp, cooling_capacity, fan_speed, power, set_point |
+| 4 | Generator | voltage, frequency, load_pct, fuel_level, run_hours, status |
 
-```
-apps/web/            Next.js dashboard
-services/api/        FastAPI backend — REST, WebSocket, Modbus, alarms
-services/simulation/ Sensor simulators
-simulation/          Facility physics engine + facility model (YAML)
-packages/types/      Shared TypeScript contracts (@dctwin/types)
-config/              Device register profiles, Mosquitto config
-infrastructure/      Prometheus + Grafana provisioning
-infra/terraform/     ECS Fargate
-deploy/              EC2 bootstrap + DEPLOY.md
-k8s/                 Kubernetes manifests
-docs/                Architecture decision records + diagrams
-```
+## Environment Variables
 
----
+| Variable | Required | Description |
+|---|---|---|
+| `JWT_SECRET` | ✅ | Random string ≥ 32 chars — never commit this |
+| `DATABASE_URL` | ✅ | `postgresql+asyncpg://user:pass@host/db` |
+| `POSTGRES_PASSWORD` | ✅ | PostgreSQL password |
+| `CORS_ORIGINS` | ✅ | Comma-separated allowed origins |
+| `NEXT_PUBLIC_API_URL` | ✅ | FastAPI base URL seen from the browser |
+| `NEXT_PUBLIC_WS_URL` | ✅ | WebSocket URL (`ws://` or `wss://`) |
+| `MQTT_BROKER_HOST` | ☐ | Mosquitto host (optional) |
+| `INFLUXDB_URL` | ☐ | InfluxDB URL (optional time-series storage) |
 
-## Deployment
+## CI
 
-A full step-by-step cloud deployment guide lives in [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
-The repository ships Terraform for AWS EC2 and ECS Fargate, Kubernetes manifests, and a
-production Docker Compose overlay.
+GitHub Actions runs on every push:
 
----
+- **python**: ruff lint, pytest, FastAPI startup check
+- **frontend**: TypeScript type-check (`tsc --noEmit`), Next.js build
+- **config**: `docker compose config` validates compose files
+- **e2e**: Playwright — login, dashboard KPIs, alarms, facility-map, settings
 
-## Design decisions
+## Deploy
 
-The reasoning behind each major choice — the monorepo, WebSocket over SSE, the pure-Python
-tick, and the Modbus register layout — is written up as Architecture Decision Records in
-[`docs/adr/`](docs/adr/).
+See [`deploy/DEPLOY.md`](deploy/DEPLOY.md) for Render + Neon + Vercel.  
+Terraform for EC2 is in [`deploy/terraform/`](deploy/terraform/README.md).
 
 ---
 
-## Author
-
-**Faryan Rajabi** — frontend & dashboard engineer, MSc student at Politecnico di Torino.
-
+**Faryan Rajabi** — frontend & dashboard engineer
 - LinkedIn: [linkedin.com/in/faryan-rajabi](https://www.linkedin.com/in/faryan-rajabi)
 - GitHub: [github.com/faryanra](https://github.com/faryanra)
-
----
-
-## License
-
-Released under the MIT License. See [`LICENSE`](LICENSE) for the full text.
-
-© 2026 Faryan Rajabi.
