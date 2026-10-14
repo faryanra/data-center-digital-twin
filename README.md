@@ -74,21 +74,32 @@ Login is handled entirely in Next.js via a server action — no FastAPI call dur
 
 ## Local Setup
 
+**Full stack (first time):**
 ```bash
-# 1. Start the full stack
 cp .env.example .env
-# Edit .env — set JWT_SECRET (≥32 chars) and POSTGRES_PASSWORD
+# Set JWT_SECRET (≥32 chars) and POSTGRES_PASSWORD in .env
 docker compose up --build
+```
 
-# 2. Or run services separately
-# Terminal 1 — backend
+**Frontend only (backend already running or Render URL configured):**
+```bash
+cd apps/web
+npm install        # first time only
+npm run dev
+```
+
+**Backend only (without Docker):**
+```bash
 cd services/api
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+
+# macOS/Linux:
+source .venv/bin/activate
+# Windows PowerShell:
+.venv\Scripts\Activate.ps1
+
 pip install -r requirements.txt
 uvicorn api_service:app --reload --port 8000
-
-# Terminal 3 — frontend
-cd apps/web && npm install && npm run dev
 ```
 
 | Service | URL |
