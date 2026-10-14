@@ -168,7 +168,7 @@ export function DashboardClient() {
       </div>
 
       {/* ── KPI strip ── */}
-      <div className="grid-4">
+      <div className="grid-3">
 
         {/* IT Load */}
         <div className="kpi-card">
@@ -230,17 +230,6 @@ export function DashboardClient() {
               </span>
             </div>
             <KpiSparkline data={trendBuf.map(b => b.pue)} color={pueColor} />
-          </div>
-        </div>
-
-        {/* Active Alarms */}
-        <div className="kpi-card">
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)' }}>Active Alarms</div>
-          <div style={{ fontSize: 30, fontWeight: 800, color: alarmColor, lineHeight: 1, marginBottom: 4 }}>
-            {alarmCount}
-          </div>
-          <div style={{ fontSize: 12, fontWeight: 600, color: alarmColor }}>
-            {alarmCount === 0 ? '✓ All clear' : alarmCount === 1 ? '1 needs attention' : `${alarmCount} need attention`}
           </div>
         </div>
       </div>
@@ -375,6 +364,80 @@ export function DashboardClient() {
               </tbody>
             </table>
           </div>
+
+          {/* ── Active Alarms (directly below Data Hall Health) ── */}
+          <div className="table-card">
+            <div style={{
+              padding: '14px 18px', borderBottom: '1px solid var(--border)',
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
+                Active Alarms
+                {alarmCount > 0 && (
+                  <span style={{
+                    marginLeft: 8, padding: '2px 8px', borderRadius: 6, fontSize: 12,
+                    fontWeight: 700, background: 'rgba(220,38,38,0.1)', color: '#DC2626',
+                  }}>
+                    {alarmCount}
+                  </span>
+                )}
+              </span>
+              <a href="/alarms" style={{ fontSize: 13, color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}>
+                View all →
+              </a>
+            </div>
+            {alarms.length === 0 ? (
+              <div style={{ padding: '28px', textAlign: 'center', color: 'var(--muted)', fontSize: 14 }}>
+                <div style={{ fontSize: 22, marginBottom: 8 }}>✓</div>
+                No active alarms
+              </div>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    {['Severity', 'Source', 'Message', 'Time', 'Action'].map(h => (
+                      <th key={h}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {alarms.slice(0, 5).map((alarm: AlarmRow) => {
+                    const sevColor = alarm.severity === 'CRITICAL' ? '#DC2626'
+                      : alarm.severity === 'WARNING' ? '#D97706' : '#2563EB';
+                    return (
+                      <tr key={alarm.id}>
+                        <td>
+                          <span style={{
+                            padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700,
+                            background: `${sevColor}18`, color: sevColor, textTransform: 'uppercase',
+                          }}>
+                            {alarm.severity}
+                          </span>
+                        </td>
+                        <td style={{ fontWeight: 600, fontSize: 13 }}>{alarm.source}</td>
+                        <td style={{ color: 'var(--muted)', fontSize: 13 }}>{alarm.message}</td>
+                        <td style={{ color: 'var(--muted)', fontSize: 13, whiteSpace: 'nowrap' }}>
+                          {timeAgo(alarm.raised_at * 1000)}
+                        </td>
+                        <td>
+                          <button
+                            onClick={() => void ackAlarm(alarm.id)}
+                            style={{
+                              padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 500,
+                              border: '1px solid var(--border)', background: 'var(--surface)',
+                              color: 'var(--text)', cursor: 'pointer',
+                            }}
+                          >
+                            Ack
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
 
         {/* RIGHT SIDEBAR */}
@@ -489,79 +552,6 @@ export function DashboardClient() {
         </div>
       </div>
 
-      {/* ── Active Alarms full-width ── */}
-      <div className="table-card">
-        <div style={{
-          padding: '14px 18px', borderBottom: '1px solid var(--border)',
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
-            Active Alarms
-            {alarmCount > 0 && (
-              <span style={{
-                marginLeft: 8, padding: '2px 8px', borderRadius: 6, fontSize: 12,
-                fontWeight: 700, background: 'rgba(220,38,38,0.1)', color: '#DC2626',
-              }}>
-                {alarmCount}
-              </span>
-            )}
-          </span>
-          <a href="/alarms" style={{ fontSize: 13, color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}>
-            View all →
-          </a>
-        </div>
-        {alarms.length === 0 ? (
-          <div style={{ padding: '28px', textAlign: 'center', color: 'var(--muted)', fontSize: 14 }}>
-            <div style={{ fontSize: 22, marginBottom: 8 }}>✓</div>
-            No active alarms
-          </div>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                {['Severity', 'Source', 'Message', 'Time', 'Action'].map(h => (
-                  <th key={h}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {alarms.slice(0, 5).map((alarm: AlarmRow) => {
-                const sevColor = alarm.severity === 'CRITICAL' ? '#DC2626'
-                  : alarm.severity === 'WARNING' ? '#D97706' : '#2563EB';
-                return (
-                  <tr key={alarm.id}>
-                    <td>
-                      <span style={{
-                        padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700,
-                        background: `${sevColor}18`, color: sevColor, textTransform: 'uppercase',
-                      }}>
-                        {alarm.severity}
-                      </span>
-                    </td>
-                    <td style={{ fontWeight: 600, fontSize: 13 }}>{alarm.source}</td>
-                    <td style={{ color: 'var(--muted)', fontSize: 13 }}>{alarm.message}</td>
-                    <td style={{ color: 'var(--muted)', fontSize: 13, whiteSpace: 'nowrap' }}>
-                      {timeAgo(alarm.raised_at * 1000)}
-                    </td>
-                    <td>
-                      <button
-                        onClick={() => void ackAlarm(alarm.id)}
-                        style={{
-                          padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 500,
-                          border: '1px solid var(--border)', background: 'var(--surface)',
-                          color: 'var(--text)', cursor: 'pointer',
-                        }}
-                      >
-                        Ack
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
     </div>
   );
 }
