@@ -50,7 +50,11 @@ async function handler(req: NextRequest, { params }: { params: Promise<{ path: s
   });
 
   const data = await res.text();
-  return new NextResponse(data, {
+  // 204/205/304 must not carry a body — the Response constructor throws
+  // "Invalid response status code 204" if one is passed (e.g. fault injection
+  // and user-delete endpoints return 204).
+  const bodyless = res.status === 204 || res.status === 205 || res.status === 304;
+  return new NextResponse(bodyless ? null : data, {
     status: res.status,
     headers: {
       'Content-Type': res.headers.get('Content-Type') ?? 'application/json',
