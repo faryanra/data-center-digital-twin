@@ -56,6 +56,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.security import APIKeyHeader
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
@@ -776,19 +777,21 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
     _VALID_FAULTS = {"utility_loss", "crah_a_trip", "rack_overload", "generator_fail"}
 
     @app.post("/simulation/fault", status_code=status.HTTP_204_NO_CONTENT,
-              dependencies=[Depends(_verify_api_key)])
-    def inject_fault(body: FaultRequest) -> None:
+              dependencies=[Depends(_verify_api_key)], response_class=Response)
+    def inject_fault(body: FaultRequest) -> Response:
         if body.fault_type not in _VALID_FAULTS:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Unknown fault '{body.fault_type}'. Valid: {sorted(_VALID_FAULTS)}",
             )
         _sim.inject_fault(body.fault_type)
+        return Response(status_code=204)
 
     @app.delete("/simulation/fault", status_code=status.HTTP_204_NO_CONTENT,
-                dependencies=[Depends(_verify_api_key)])
-    def clear_all_faults() -> None:
+                dependencies=[Depends(_verify_api_key)], response_class=Response)
+    def clear_all_faults() -> Response:
         _sim.clear_faults()
+        return Response(status_code=204)
 
     # ----- control endpoints -----
 
@@ -1009,16 +1012,17 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
         _users_store.append(user)
         return {k: v for k, v in user.items() if k != "_password_hash"}
 
-    @app.delete("/users/{user_id}", status_code=204)
+    @app.delete("/users/{user_id}", status_code=204, response_class=Response)
     async def delete_user(
         user_id: str,
         current_user: dict = Depends(require_admin),
-    ) -> None:
+    ) -> Response:
         global _users_store
         before = len(_users_store)
         _users_store = [u for u in _users_store if u["id"] != user_id]
         if len(_users_store) == before:
             raise HTTPException(status_code=404, detail="User not found")
+        return Response(status_code=204)
 
     return app
 
