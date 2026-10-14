@@ -424,13 +424,36 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        database.initialize()
-        await init_db()
+        nonlocal database
+        # Metrics DB: never let an unreachable PostgreSQL crash startup. Fall back
+        # to a local SQLite file so the API still serves the live digital twin.
+        try:
+            database.initialize()
+        except Exception:
+            LOG.warning(
+                "Metrics DB unavailable (%s); falling back to local SQLite",
+                getattr(database, "dsn", "?"), exc_info=True,
+            )
+            try:
+                database = Database("sqlite:///./dc_metrics.db")
+                database.initialize()
+                LOG.info("Metrics DB using local SQLite (dc_metrics.db)")
+            except Exception:
+                LOG.warning("SQLite fallback failed; device/telemetry endpoints degraded", exc_info=True)
 
-        init_mqtt(
-            host=os.getenv("MQTT_HOST", "localhost"),
-            port=int(os.getenv("MQTT_PORT", "1883")),
-        )
+        # Alarm-history DB (async, SQLite by default) — non-fatal if unreachable.
+        try:
+            await init_db()
+        except Exception:
+            LOG.warning("Alarm-history DB unavailable; /alarms/history disabled", exc_info=True)
+
+        try:
+            init_mqtt(
+                host=os.getenv("MQTT_HOST", "localhost"),
+                port=int(os.getenv("MQTT_PORT", "1883")),
+            )
+        except Exception:
+            LOG.warning("MQTT unavailable; telemetry publish disabled", exc_info=True)
         # Modbus is only meaningful on local/Docker — skip on Render (RENDER env var is set automatically)
         _is_render = bool(os.getenv("RENDER"))
         _modbus_task = None

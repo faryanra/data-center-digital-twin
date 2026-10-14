@@ -30,7 +30,9 @@ class Database:
         else:
             import psycopg
 
-            connection = psycopg.connect(self.dsn)
+            # Fail fast instead of blocking forever when PostgreSQL is
+            # unreachable or stalls on handshake — the caller can then fall back.
+            connection = psycopg.connect(self.dsn, connect_timeout=3)
         try:
             yield connection
             connection.commit()
