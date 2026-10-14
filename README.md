@@ -4,7 +4,13 @@
 
 A real-time simulation and monitoring platform for a Tier-III data centre, built to demonstrate how digital-twin technology can support operations without requiring physical hardware.
 
-![System Architecture](docs/screenshots/01-system-architecture.svg)
+| Dashboard overview | Energy analytics |
+|---|---|
+| ![Dashboard](docs/screenshots/01-dashboard.png) | ![Energy](docs/screenshots/02-energy.png) |
+
+| Equipment inventory | |
+|---|---|
+| ![Equipment](docs/screenshots/03-equipment.png) | |
 
 ## What It Monitors
 
@@ -15,8 +21,6 @@ The same snapshot updates Modbus TCP holding registers on port 5020, so any stan
 **Facility model:** two data halls (Hall A: 10 racks, Hall B: 8 racks), UPS bank, PDU, two CRAH units, diesel generator with ATS.
 
 ## Architecture
-
-![Simulation Engine](docs/screenshots/02-simulation-engine.svg)
 
 ```
 Browser (PWA)
@@ -36,8 +40,6 @@ Browser (PWA)
 | `httpOnly` JWT cookie | XSS-resistant auth; proxy extracts role headers before forwarding to API |
 
 ## Auth Flow
-
-![Auth Flow](docs/screenshots/03-auth-flow.svg)
 
 Login is handled entirely in Next.js via a server action — no FastAPI call during authentication. The server action validates credentials, signs a JWT (HS256, 8 h), and sets an `httpOnly` cookie. On subsequent requests the proxy decodes that cookie and forwards `X-User-Email` + `X-User-Role` headers to FastAPI. FastAPI uses `Depends(require_operator)` or `Depends(require_admin)` to enforce roles.
 
