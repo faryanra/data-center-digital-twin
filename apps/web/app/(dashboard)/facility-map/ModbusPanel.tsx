@@ -42,7 +42,7 @@ export function ModbusPanel() {
   useEffect(() => { fetch_(); }, [fetch_]);
 
   return (
-    <div className="w-64 shrink-0 rounded border border-[var(--border)] bg-[var(--surface)] p-4"
+    <div className="w-72 shrink-0 rounded border border-[var(--border)] bg-[var(--surface)] p-4"
       style={{ alignSelf: 'flex-start' }}>
 
       {/* header */}
@@ -59,7 +59,9 @@ export function ModbusPanel() {
         <button
           onClick={fetch_}
           disabled={loading}
-          className="text-[12px] text-[var(--muted)] transition-colors hover:text-[var(--accent)] disabled:opacity-50"
+          aria-label="Reload registers"
+          style={{ width: 40, height: 40, fontSize: 20 }}
+          className="-mr-2 flex items-center justify-center rounded leading-none text-[var(--muted)] transition-colors hover:bg-[var(--bg)] hover:text-[var(--accent)] disabled:opacity-50"
         >
           {loading ? '…' : '↺'}
         </button>
@@ -67,23 +69,23 @@ export function ModbusPanel() {
 
       {/* table */}
       {data ? (
-        <table className="w-full text-xs">
+        <table className="w-full border-collapse text-xs">
           <thead>
             <tr className="border-b border-[var(--border)]">
-              <th className="pb-1 text-left text-[12px] font-semibold text-[var(--muted)]">Device</th>
-              <th className="pb-1 text-left text-[12px] font-semibold text-[var(--muted)]">Sl</th>
-              <th className="pb-1 text-left text-[12px] font-semibold text-[var(--muted)]">R[0..3]</th>
+              <th className="px-2 py-1.5 text-left text-[12px] font-semibold text-[var(--muted)]">Device</th>
+              <th className="px-2 py-1.5 text-left text-[12px] font-semibold text-[var(--muted)]">Sl</th>
+              <th className="px-2 py-1.5 text-left text-[12px] font-semibold text-[var(--muted)]">R[0..3]</th>
             </tr>
           </thead>
           <tbody>
-            {Object.entries(data).map(([key, entry]) => (
-              <tr key={key} className="border-b border-[var(--border)]/40 last:border-0">
-                <td className="py-1.5 text-[var(--text)]">{DEVICE_LABELS[key] ?? key}</td>
-                <td className="py-1.5 text-[var(--muted)]">{entry.slave_id}</td>
-                <td className="py-1.5 font-mono text-[var(--muted)]">
+            {Object.entries(data).map(([key, entry], i) => (
+              <tr key={key} className={i % 2 === 1 ? 'bg-[var(--bg)]' : ''}>
+                <td className="px-2 py-2 text-[var(--text)]">{DEVICE_LABELS[key] ?? key}</td>
+                <td className="px-2 py-2 text-[var(--muted)]">{entry.slave_id}</td>
+                <td className="px-2 py-2 font-mono text-[var(--muted)]" style={{ letterSpacing: '0.03em' }}>
                   {entry.error
                     ? <span className="text-[#EF4444]">err</span>
-                    : (entry.holding_registers ?? []).slice(0, 4).join(' ')}
+                    : (entry.holding_registers ?? []).slice(0, 4).join('  ')}
                 </td>
               </tr>
             ))}
