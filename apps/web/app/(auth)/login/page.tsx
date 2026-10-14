@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useActionState } from 'react';
 import { loginAction } from './actions';
 import { AppLogo } from '@/components/AppLogo';
 
@@ -12,18 +12,7 @@ const inputStyle = {
 };
 
 export default function LoginPage() {
-  const [error, setError] = useState('');
-  const [isPending, startTransition] = useTransition();
-
-  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    setError('');
-    startTransition(async () => {
-      const result = await loginAction(formData);
-      if (result?.error) setError(result.error);
-    });
-  }
+  const [state, formAction, isPending] = useActionState(loginAction, null);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-[var(--bg)] px-4">
@@ -36,7 +25,7 @@ export default function LoginPage() {
         </div>
 
         <form
-          onSubmit={handleSubmit}
+          action={formAction}
           style={{
             borderRadius: 12, padding: '36px 32px',
             border: '1px solid var(--border)',
@@ -55,6 +44,7 @@ export default function LoginPage() {
               name="email"
               type="email"
               required
+              autoComplete="email"
               placeholder="you@datacenter.local"
               style={inputStyle}
             />
@@ -72,12 +62,13 @@ export default function LoginPage() {
               name="password"
               type="password"
               required
+              autoComplete="current-password"
               style={inputStyle}
             />
           </div>
 
-          {error && (
-            <p style={{ fontSize: 14, color: 'var(--crit)', marginBottom: 12 }}>{error}</p>
+          {state?.error && (
+            <p style={{ fontSize: 14, color: 'var(--crit)', marginBottom: 12 }}>{state.error}</p>
           )}
 
           <button

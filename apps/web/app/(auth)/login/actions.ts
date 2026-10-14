@@ -5,7 +5,10 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { MOCK_USERS, JWT_SECRET } from '@/lib/auth/mock-auth';
 
-export async function loginAction(formData: FormData): Promise<{ error: string } | void> {
+export async function loginAction(
+  _prev: { error: string } | null,
+  formData: FormData,
+): Promise<{ error: string } | null> {
   const email = (formData.get('email') as string | null)?.trim();
   const password = formData.get('password') as string | null;
 
