@@ -9,6 +9,7 @@ import re
 import sys
 import time
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 # Project root → finds simulation.*
 # services/api  → finds alarms, alarm_evaluator
@@ -18,7 +19,7 @@ sys.path.insert(0, _HERE)
 from simulation.electrical.facility_sim import FacilitySimulator
 
 from alarm_evaluator import evaluate as evaluate_alarms
-from alarm_persistence import query_alarm_history
+from alarm_persistence import query_alarm_history, upsert_alarm
 from alarms import AlarmManager
 from database import AsyncSessionLocal, init_db
 from device_profile_loader import load_all_profiles
@@ -321,6 +322,47 @@ def _serialize_rows(rows: list[dict]) -> list[dict]:
     return [{**row, "timestamp": str(row["timestamp"])} for row in rows]
 
 
+# Alarm IDs already mirrored into the DB, so we only write on raise/clear deltas.
+_persisted_alarm_ids: set[str] = set()
+
+
+async def _persist_alarm_deltas() -> None:
+    """Mirror the in-memory alarm manager into the alarms table.
+
+    Writes a row when an alarm is first raised and stamps cleared_at when it
+    clears, so GET /alarms/history reflects what the simulator produced and the
+    record survives a restart. Best-effort — a DB hiccup must never break the
+    broadcast loop.
+    """
+    try:
+        active = {a.id: a for a in _alarm_mgr.list_active()}
+        new_ids = [aid for aid in active if aid not in _persisted_alarm_ids]
+        cleared_ids = [aid for aid in _persisted_alarm_ids if aid not in active]
+        if not new_ids and not cleared_ids:
+            return
+        async with AsyncSessionLocal() as db:
+            for aid in new_ids:
+                a = active[aid]
+                await upsert_alarm(db, {
+                    "alarm_id": aid,
+                    "severity": a.severity.value,
+                    "status": "ACTIVE",
+                    "equipment_id": a.source,
+                    "message": a.message,
+                    "triggered_at": datetime.fromtimestamp(a.raised_at, UTC),
+                })
+                _persisted_alarm_ids.add(aid)
+            for aid in cleared_ids:
+                await upsert_alarm(db, {
+                    "alarm_id": aid,
+                    "status": "CLEARED",
+                    "cleared_at": datetime.now(UTC),
+                })
+                _persisted_alarm_ids.discard(aid)
+    except Exception:
+        LOG.warning("alarm persistence sync failed", exc_info=True)
+
+
 async def _update_platform_gauges(database: Database) -> None:
     """Background task: refresh device and alert gauges every 30 s."""
     while True:
@@ -402,6 +444,7 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
                 try:
                     snap = _sim.tick()
                     evaluate_alarms(snap, _alarm_mgr)
+                    await _persist_alarm_deltas()
                     update_registers_from_snapshot(snap)
                     publish_snapshot(snap)
                     snap_dict = _snapshot_to_dict(snap)
@@ -709,8 +752,13 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
     # ----- alarms -----
 
     @app.get("/alarms")
-    async def get_alarms(state: str = "all") -> list[dict]:
+    async def get_alarms(
+        state: str = "all",
+        limit: int = Query(default=0, ge=0, le=500),
+    ) -> list[dict]:
         alarms = _alarm_mgr.list_active() if state == "active" else _alarm_mgr.list_all()
+        if limit:
+            alarms = alarms[:limit]
         return [
             {
                 "id": a.id,

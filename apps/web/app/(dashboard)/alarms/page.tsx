@@ -27,6 +27,7 @@ export default function AlarmsPage() {
   const [tab, setTab]           = useState<TabId>('active');
   const [alarms, setAlarms]     = useState<AlarmRow[]>([]);
   const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState(false);
   const [lastFetchMs, setLastFetchMs] = useState<number | null>(null);
   const [activeCount, setActiveCount] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -34,13 +35,17 @@ export default function AlarmsPage() {
   async function fetchAlarms(currentTab: TabId) {
     try {
       const res = await fetch(`${API}/alarms?state=${currentTab}`);
-      if (!res.ok) return;
+      if (!res.ok) { setError(true); return; }
       const data = await res.json() as unknown;
       const rows = Array.isArray(data) ? (data as AlarmRow[]) : ((data as { alarms?: AlarmRow[] }).alarms ?? []);
       setAlarms(rows);
+      setError(false);
       setLastFetchMs(Date.now());
       if (currentTab === 'active') setActiveCount(rows.length);
-    } catch { /* network offline */ } finally {
+    } catch {
+      // Don't let a backend outage masquerade as "no active alarms".
+      setError(true);
+    } finally {
       setLoading(false);
     }
   }
@@ -164,6 +169,19 @@ export default function AlarmsPage() {
       {loading ? (
         <div style={{ padding: '48px 20px', textAlign: 'center', color: 'var(--muted)', fontSize: 14 }}>
           Loading alarms…
+        </div>
+      ) : error && alarms.length === 0 ? (
+        <div style={{
+          padding: '24px 20px', textAlign: 'center',
+          background: 'rgba(220,38,38,0.06)', border: '1px solid rgba(220,38,38,0.3)',
+          borderRadius: 4,
+        }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: '#DC2626', marginBottom: 4 }}>
+            Couldn’t reach the alarm service
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+            The backend is unreachable — this is not the same as “no active alarms”. Retrying every 15s.
+          </div>
         </div>
       ) : alarms.length === 0 ? (
         <div style={{ padding: '40px 20px', textAlign: 'center' }}>
