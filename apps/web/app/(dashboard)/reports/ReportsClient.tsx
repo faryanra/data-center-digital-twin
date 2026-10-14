@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import * as XLSX from 'xlsx';
 import { useFacilitySocket } from '@/hooks/useFacilitySocket';
 import type { AlarmRow } from '@dctwin/types';
 
@@ -45,8 +44,12 @@ function exportCSV(data: Record<string, unknown>[], filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function exportExcel(data: Record<string, unknown>[], filename: string) {
+// xlsx is a large CJS module — importing it at the top level pulls it into the
+// client component's SSR/RSC evaluation and can throw "enqueueModel is not a
+// function". Load it lazily, only when the user actually exports.
+async function exportExcel(data: Record<string, unknown>[], filename: string) {
   if (data.length === 0) return;
+  const XLSX = await import('xlsx');
   const ws = XLSX.utils.json_to_sheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Report');
@@ -273,7 +276,7 @@ export function ReportsClient() {
                 Download CSV
               </button>
               <button
-                onClick={() => exportExcel(reportData, fileTag)}
+                onClick={() => void exportExcel(reportData, fileTag)}
                 disabled={reportData.length === 0}
                 style={{
                   padding: '6px 14px', borderRadius: 2, fontSize: 13, fontWeight: 500,
