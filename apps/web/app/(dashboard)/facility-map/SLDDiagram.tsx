@@ -95,15 +95,30 @@ function SldNode({ x, y, w = 140, h = 52, label, sublabel, status }: SldNodeProp
 
 // ── Connection line (neutral, 90° elbows via path) ────────────────────────────
 
-function ConnLine({ d, dashed = false }: { d: string; dashed?: boolean }) {
+function ConnLine({ d, dashed = false, energized = true }: { d: string; dashed?: boolean; energized?: boolean }) {
   return (
-    <path
-      d={d}
-      stroke="var(--border)"
-      strokeWidth={1.5}
-      strokeDasharray={dashed ? '5 3' : undefined}
-      fill="none"
-    />
+    <>
+      <path
+        d={d}
+        stroke="var(--border)"
+        strokeWidth={1.5}
+        strokeDasharray={dashed ? '5 3' : undefined}
+        fill="none"
+      />
+      {/* Power-flow animation: a marching accent dash over energized runs */}
+      {energized && !dashed && (
+        <path
+          className="sld-flow"
+          d={d}
+          stroke="var(--accent)"
+          strokeWidth={1.5}
+          strokeDasharray="4 8"
+          strokeLinecap="round"
+          fill="none"
+          opacity={0.75}
+        />
+      )}
+    </>
   );
 }
 

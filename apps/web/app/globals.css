@@ -230,6 +230,17 @@ button, label, th, nav a { font-weight: 500; }
   50% { opacity: 0.4; }
 }
 
+/* SLD power-flow: a dashed accent that marches along energized paths */
+@keyframes sld-flow {
+  to { stroke-dashoffset: -24; }
+}
+.sld-flow {
+  animation: sld-flow 1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sld-flow { animation: none; }
+}
+
 /* Mobile / PWA */
 @media (max-width: 768px) {
   .sidebar-nav { display: none; }
