@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from common.database import Database
 
@@ -31,7 +31,7 @@ class OfflineDetector:
                 LOG.exception("OfflineDetector check failed")
 
     def _check(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for d in self.database.list_devices_last_seen():
             last_seen = d["last_seen"]
             if last_seen is None:
@@ -39,7 +39,7 @@ class OfflineDetector:
             if isinstance(last_seen, str):
                 last_seen = datetime.fromisoformat(last_seen)
             if last_seen.tzinfo is None:
-                last_seen = last_seen.replace(tzinfo=timezone.utc)
+                last_seen = last_seen.replace(tzinfo=UTC)
             age = (now - last_seen).total_seconds()
             if age <= OFFLINE_THRESHOLD_SECONDS:
                 continue
