@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-from datetime import timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +27,7 @@ async def upsert_alarm(db: AsyncSession, alarm: dict) -> None:
                 status=alarm.get("status", "ACTIVE"),
                 equipment_id=alarm.get("equipment_id", "unknown"),
                 message=alarm.get("message", ""),
-                triggered_at=alarm.get("triggered_at") or datetime.datetime.now(timezone.utc),
+                triggered_at=alarm.get("triggered_at") or datetime.datetime.now(datetime.UTC),
                 fault_type=alarm.get("fault_type"),
             ))
         await db.commit()
