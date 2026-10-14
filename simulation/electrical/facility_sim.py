@@ -104,7 +104,7 @@ class FacilitySimulator:
         elapsed      = now - self._gen_state_entered_at
 
         if self._gen_state == "STANDBY":
-            if utility_lost and not gen_fail:
+            if utility_lost and not gen_fail and self._state["gen_auto_start"]:
                 self._gen_state = "STARTING"
                 self._gen_state_entered_at = now
 
@@ -323,7 +323,11 @@ class FacilitySimulator:
                 ups.battery_soc = max(0.0, ups.battery_soc - drain_rate)
         else:
             ups.input_voltage_v = 400.0 + random.gauss(0, 0.5)
-            if ups.mode in ("BATTERY", "BYPASS"):
+            # Keep a deliberately-engaged maintenance bypass across ticks; only
+            # auto-recover BATTERY (or a stale BYPASS) back to NORMAL.
+            if self._state["ups_bypass_enabled"]:
+                ups.mode = "BYPASS"
+            elif ups.mode in ("BATTERY", "BYPASS"):
                 ups.mode = "NORMAL"
             if ups.battery_soc < 1.0:
                 ups.battery_soc = min(1.0, ups.battery_soc + 0.0005)
