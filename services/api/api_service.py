@@ -73,6 +73,15 @@ _DEVICE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 class FaultRequest(BaseModel):
     fault_type: str
+
+
+class UserCreate(BaseModel):
+    name: str
+    email: str
+    password: str
+    role: str = "OPERATOR"
+
+
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 limiter = Limiter(key_func=get_remote_address)
 
@@ -1048,12 +1057,6 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
             "created_at": 1700000000,
         },
     ]
-
-    class UserCreate(BaseModel):
-        name: str
-        email: str
-        password: str
-        role: str = "OPERATOR"
 
     @app.get("/users")
     async def list_users(current_user: dict = Depends(require_admin)) -> list[dict]:
