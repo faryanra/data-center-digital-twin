@@ -37,9 +37,6 @@ class Settings:
     mqtt_alert_topic: str
     api_host: str
     api_port: int
-    telegram_bot_token: str
-    telegram_chat_id: str
-    catalog_url: str
     database_url: str
     api_key: str
     cors_origins: str
@@ -55,15 +52,16 @@ class Settings:
         )
 
 
-_DEFAULT_PG_PASSWORD = "smarthome"
+# Same development defaults as docker-compose.yml and .env.example (dc/dc/dc).
+_DEFAULT_PG_PASSWORD = "dc"
 
 
 def get_settings() -> Settings:
     settings = Settings(
         postgres_host=_value("POSTGRES_HOST", "localhost"),
         postgres_port=_port("POSTGRES_PORT", 5432),
-        postgres_db=_value("POSTGRES_DB", "dc_north_01"),
-        postgres_user=_value("POSTGRES_USER", "dc_admin"),
+        postgres_db=_value("POSTGRES_DB", "dc"),
+        postgres_user=_value("POSTGRES_USER", "dc"),
         postgres_password=_value("POSTGRES_PASSWORD", _DEFAULT_PG_PASSWORD),
         mqtt_host=_value("MQTT_HOST", "localhost"),
         mqtt_port=_port("MQTT_PORT", 1883),
@@ -71,9 +69,6 @@ def get_settings() -> Settings:
         mqtt_alert_topic=_value("MQTT_ALERT_TOPIC", "dc/facility/alarms"),
         api_host=_value("API_HOST", "0.0.0.0"),
         api_port=_port("API_PORT", 8000),
-        telegram_bot_token=_value("TELEGRAM_BOT_TOKEN", ""),
-        telegram_chat_id=_value("TELEGRAM_CHAT_ID", ""),
-        catalog_url=_value("CATALOG_URL", "http://127.0.0.1:8081"),
         database_url=_value("DATABASE_URL", ""),
         api_key=_value("API_KEY", ""),
         cors_origins=_value("CORS_ORIGINS", ""),

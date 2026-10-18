@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(_HERE, '..', '..'))
 sys.path.insert(0, _HERE)
 from simulation.electrical.facility_sim import MAX_FAULT_DURATION_S, FacilitySimulator
 
+import facility_metrics
 from alarm_evaluator import THRESHOLDS, hall_status
 from alarm_evaluator import evaluate as evaluate_alarms
 from alarm_persistence import query_alarm_history, upsert_alarm
@@ -518,6 +519,7 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
                 try:
                     snap = _sim.tick()
                     evaluate_alarms(snap, _alarm_mgr)
+                    facility_metrics.update(snap, _alarm_mgr)
                     await _persist_alarm_deltas()
                     update_registers_from_snapshot(snap)
                     publish_snapshot(snap)

@@ -1,6 +1,6 @@
 apiVersion: 1
 providers:
-  - name: IoT Dashboards
+  - name: DC Dashboards
     type: file
     disableDeletion: false
     updateIntervalSeconds: 30
