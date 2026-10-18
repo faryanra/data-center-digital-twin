@@ -6,7 +6,7 @@
  * Usage: fetch('/api/proxy/alarms') → backend:8000/alarms
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getCurrentUser } from '@/lib/auth/session';
+import { cookies } from 'next/headers';
 
 const BACKEND = process.env.API_BASE_URL ?? 'http://localhost:8000';
 
@@ -21,14 +21,14 @@ async function handler(req: NextRequest, { params }: { params: Promise<{ path: s
   const search = req.nextUrl.search;
   const url = `${BACKEND}/${backendPath}${search}`;
 
-  const user = await getCurrentUser();
-
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-  if (user) {
-    headers['X-User-Email'] = user.email;
-    headers['X-User-Role'] = user.role;
+  // Forward the signed session JWT; FastAPI verifies it with the shared
+  // JWT_SECRET, so a caller cannot claim a role by setting headers.
+  const token = (await cookies()).get('auth_token')?.value;
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
   }
   // Attach the machine API key server-side (never exposed to the browser) so
   // api-key-gated endpoints (energy, telemetry, devices, simulation/fault)

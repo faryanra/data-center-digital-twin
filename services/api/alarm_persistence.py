@@ -17,9 +17,11 @@ async def upsert_alarm(db: AsyncSession, alarm: dict) -> None:
             select(AlarmRecord).where(AlarmRecord.alarm_id == alarm["alarm_id"])
         )).scalar_one_or_none()
         if existing:
-            existing.status = alarm.get("status", existing.status)
-            existing.acknowledged_at = alarm.get("acknowledged_at")
-            existing.cleared_at = alarm.get("cleared_at")
+            # Only touch fields the caller supplied — clearing an acknowledged
+            # alarm must not erase when it was acknowledged.
+            for field in ("status", "acknowledged_at", "cleared_at"):
+                if alarm.get(field) is not None:
+                    setattr(existing, field, alarm[field])
         else:
             db.add(AlarmRecord(
                 alarm_id=alarm["alarm_id"],
@@ -28,6 +30,8 @@ async def upsert_alarm(db: AsyncSession, alarm: dict) -> None:
                 equipment_id=alarm.get("equipment_id", "unknown"),
                 message=alarm.get("message", ""),
                 triggered_at=alarm.get("triggered_at") or datetime.datetime.now(datetime.UTC),
+                acknowledged_at=alarm.get("acknowledged_at"),
+                cleared_at=alarm.get("cleared_at"),
                 fault_type=alarm.get("fault_type"),
             ))
         await db.commit()

@@ -16,8 +16,9 @@ from datetime import UTC, datetime
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, '..', '..'))
 sys.path.insert(0, _HERE)
-from simulation.electrical.facility_sim import FacilitySimulator
+from simulation.electrical.facility_sim import MAX_FAULT_DURATION_S, FacilitySimulator
 
+from alarm_evaluator import THRESHOLDS, hall_status
 from alarm_evaluator import evaluate as evaluate_alarms
 from alarm_persistence import query_alarm_history, upsert_alarm
 from alarms import AlarmManager
@@ -29,6 +30,7 @@ from mqtt_publisher import init_mqtt, publish_snapshot, shutdown_mqtt
 _sim = FacilitySimulator()
 _alarm_mgr = AlarmManager()
 
+import jwt
 import uvicorn
 from common.database import Database
 from common.metrics import (
@@ -60,7 +62,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.security import APIKeyHeader
 from prometheus_fastapi_instrumentator import Instrumentator
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -73,6 +75,8 @@ _DEVICE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 class FaultRequest(BaseModel):
     fault_type: str
+    # Faults hit every viewer of the shared simulator, so they always expire.
+    duration_s: int = Field(default=60, ge=10, le=120)
 
 
 class UserCreate(BaseModel):
@@ -124,12 +128,15 @@ def _snapshot_to_dict(snap) -> dict:  # type: ignore[no-untyped-def]
         "total_power_kw": round(snap.total_facility_power_w / 1000, 1),
         "utility_ok": snap.utility_online,
         "generator_state": snap.generator_state,
+        "power_source": snap.power_source,
+        "active_faults": snap.active_faults,
         "generator_fuel_pct": round(snap.generator_fuel_pct, 1),
         "per_hall_cooling_kw": snap.per_hall_cooling_kw,
         "halls": [
             {
                 "id": pdu.location,
-                "name": pdu.location.replace("data-hall-", "Data Hall ").replace("-a", " A").replace("-b", " B") if "data-hall-" in pdu.location else f"Data Hall {pdu.location}",
+                "name": "Data Hall " + pdu.location.removeprefix("data-hall-").upper(),
+                "status": hall_status(pdu, snap),
                 "total_kw": round(pdu.it_load_w / 1000, 1),
                 "capacity_kw": round(sum(r.active_power_w for r in pdu.racks) / 1000 * 1.5 + 20, 1),
                 "avg_inlet_c": round(
@@ -258,11 +265,32 @@ async def _verify_api_key(key: str | None = Security(_api_key_header)) -> None:
         )
 
 
-def get_current_user(
-    x_user_email: str = Header(alias="X-User-Email"),
-    x_user_role: str = Header(alias="X-User-Role"),
-) -> dict:
-    return {"email": x_user_email, "role": x_user_role}
+# Must match the secret the Next.js login action signs with (apps/web/lib/auth/mock-auth.ts).
+_DEV_JWT_SECRET = "dev-insecure-change-me"
+
+
+def _jwt_secret() -> str:
+    return os.getenv("JWT_SECRET") or _DEV_JWT_SECRET
+
+
+def get_current_user(authorization: str | None = Header(default=None)) -> dict:
+    """Identify the caller from the signed session JWT the frontend proxy forwards.
+
+    Role headers are never trusted: anyone can send them, but only the holder of
+    JWT_SECRET can mint a token that verifies here.
+    """
+    unauthorized = {"WWW-Authenticate": "Bearer"}
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token", headers=unauthorized)
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        claims = jwt.decode(token, _jwt_secret(), algorithms=["HS256"])
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token", headers=unauthorized) from None
+    email, role = claims.get("email"), claims.get("role")
+    if not isinstance(email, str) or role not in ("ADMIN", "OPERATOR"):
+        raise HTTPException(status_code=401, detail="Token is missing email/role claims", headers=unauthorized)
+    return {"email": email, "role": role, "name": claims.get("name")}
 
 
 def require_operator(current_user: dict = Depends(get_current_user)) -> dict:
@@ -331,43 +359,50 @@ def _serialize_rows(rows: list[dict]) -> list[dict]:
     return [{**row, "timestamp": str(row["timestamp"])} for row in rows]
 
 
-# Alarm IDs already mirrored into the DB, so we only write on raise/clear deltas.
-_persisted_alarm_ids: set[str] = set()
+# Last state written to the DB per alarm id, so we only write on changes.
+_persisted_alarm_state: dict[str, str] = {}
+
+
+def _ts(epoch: float | None) -> datetime | None:
+    return datetime.fromtimestamp(epoch, UTC) if epoch is not None else None
 
 
 async def _persist_alarm_deltas() -> None:
     """Mirror the in-memory alarm manager into the alarms table.
 
-    Writes a row when an alarm is first raised and stamps cleared_at when it
-    clears, so GET /alarms/history reflects what the simulator produced and the
-    record survives a restart. Best-effort — a DB hiccup must never break the
-    broadcast loop.
+    Raised → ACTIVE row; acknowledged → ACKNOWLEDGED with acknowledged_at;
+    gone from the manager (auto-cleared or cleared by an admin) → CLEARED with
+    cleared_at. Best-effort — a DB hiccup must never break the broadcast loop.
     """
     try:
-        active = {a.id: a for a in _alarm_mgr.list_active()}
-        new_ids = [aid for aid in active if aid not in _persisted_alarm_ids]
-        cleared_ids = [aid for aid in _persisted_alarm_ids if aid not in active]
-        if not new_ids and not cleared_ids:
-            return
-        async with AsyncSessionLocal() as db:
-            for aid in new_ids:
-                a = active[aid]
-                await upsert_alarm(db, {
-                    "alarm_id": aid,
+        current = {a.id: a for a in _alarm_mgr.list_all()}
+        writes: list[dict] = []
+        for aid, a in current.items():
+            state = a.state.value
+            previous = _persisted_alarm_state.get(aid)
+            if previous == state:
+                continue
+            row: dict = {"alarm_id": aid, "status": state, "acknowledged_at": _ts(a.acked_at)}
+            if previous is None:
+                row.update({
                     "severity": a.severity.value,
-                    "status": "ACTIVE",
                     "equipment_id": a.source,
                     "message": a.message,
-                    "triggered_at": datetime.fromtimestamp(a.raised_at, UTC),
+                    "triggered_at": _ts(a.raised_at),
                 })
-                _persisted_alarm_ids.add(aid)
-            for aid in cleared_ids:
-                await upsert_alarm(db, {
-                    "alarm_id": aid,
-                    "status": "CLEARED",
-                    "cleared_at": datetime.now(UTC),
-                })
-                _persisted_alarm_ids.discard(aid)
+            writes.append(row)
+        for aid in _persisted_alarm_state.keys() - current.keys():
+            writes.append({"alarm_id": aid, "status": "CLEARED", "cleared_at": datetime.now(UTC)})
+        if not writes:
+            return
+        async with AsyncSessionLocal() as db:
+            for row in writes:
+                await upsert_alarm(db, row)
+        for row in writes:
+            if row["status"] == "CLEARED":
+                _persisted_alarm_state.pop(row["alarm_id"], None)
+            else:
+                _persisted_alarm_state[row["alarm_id"]] = row["status"]
     except Exception:
         LOG.warning("alarm persistence sync failed", exc_info=True)
 
@@ -463,12 +498,19 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
             )
         except Exception:
             LOG.warning("MQTT unavailable; telemetry publish disabled", exc_info=True)
-        # Modbus is only meaningful on local/Docker — skip on Render (RENDER env var is set automatically)
+        if _jwt_secret() == _DEV_JWT_SECRET:
+            LOG.warning("JWT_SECRET is not set — using the development secret; set it (same value as the frontend) before deploying")
+
+        # Modbus is only meaningful on local/Docker — skip on Render (RENDER env var is set automatically).
+        # Loopback by default; Docker sets MODBUS_HOST=0.0.0.0 so the published port is reachable.
         _is_render = bool(os.getenv("RENDER"))
         _modbus_task = None
         if not _is_render:
             _modbus_task = asyncio.create_task(
-                run_modbus_server("127.0.0.1", int(os.getenv("MODBUS_PORT", "5020")))
+                run_modbus_server(
+                    os.getenv("MODBUS_HOST", "127.0.0.1"),
+                    int(os.getenv("MODBUS_PORT", "5020")),
+                )
             )
 
         async def sim_broadcast_loop() -> None:
@@ -502,7 +544,7 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
         sim_task.cancel()
         snmp_task.cancel()
 
-    app = FastAPI(title="DC-NORTH-01 Data Center Digital Twin API", version="2.0.0", lifespan=lifespan)
+    app = FastAPI(title="DC-NORTH-01 Data Center Digital Twin API", version="1.0.0", lifespan=lifespan)
 
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -517,8 +559,8 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_methods=["GET", "POST", "PUT", "DELETE"],
-        allow_headers=["X-API-Key", "Content-Type", "X-User-Email", "X-User-Role"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        allow_headers=["X-API-Key", "Content-Type", "Authorization"],
         allow_credentials=True,
     )
 
@@ -546,7 +588,10 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
         return _sensors
 
     @app.post("/sensors")
-    async def add_sensor(body: dict = Body(...)) -> dict:
+    async def add_sensor(
+        body: dict = Body(...),
+        current_user: dict = Depends(require_operator),
+    ) -> dict:
         sensor = {
             "id": f"{body.get('type','sensor')}-{len(_sensors)+1:03d}",
             "type": body.get("type", "temperature"),
@@ -558,7 +603,10 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
         return sensor
 
     @app.patch("/sensors/{sensor_id}")
-    async def toggle_sensor(sensor_id: str) -> dict:
+    async def toggle_sensor(
+        sensor_id: str,
+        current_user: dict = Depends(require_operator),
+    ) -> dict:
         for s in _sensors:
             if s["id"] == sensor_id:
                 s["enabled"] = not s["enabled"]
@@ -569,9 +617,12 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
     async def ws_facility(websocket: WebSocket) -> None:
         await manager.connect(websocket)
         try:
+            # Clients never send; awaiting a frame returns as soon as the socket closes.
             while True:
-                await asyncio.sleep(0.1)
+                await websocket.receive_text()
         except WebSocketDisconnect:
+            pass
+        finally:
             manager.disconnect(websocket)
 
     # ----- authenticated -----
@@ -783,12 +834,23 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
 
     # ----- alarms -----
 
+    @app.get("/thresholds")
+    async def get_thresholds() -> dict:
+        """Alarm limits used by the evaluator — the only threshold table in the system."""
+        return THRESHOLDS
+
     @app.get("/alarms")
     async def get_alarms(
-        state: str = "all",
+        state: str = Query(default="all", pattern="^(all|active|acknowledged)$"),
         limit: int = Query(default=0, ge=0, le=500),
     ) -> list[dict]:
-        alarms = _alarm_mgr.list_active() if state == "active" else _alarm_mgr.list_all()
+        # Cleared alarms leave the live manager; read them from GET /alarms/history?status=CLEARED.
+        if state == "active":
+            alarms = _alarm_mgr.list_active()
+        elif state == "acknowledged":
+            alarms = _alarm_mgr.list_acknowledged()
+        else:
+            alarms = _alarm_mgr.list_all()
         if limit:
             alarms = alarms[:limit]
         return [
@@ -852,28 +914,7 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
             for r in rows
         ]
 
-    # ----- simulation fault injection -----
-
-    _VALID_FAULTS = {"utility_loss", "crah_a_trip", "rack_overload", "generator_fail"}
-
-    @app.post("/simulation/fault", status_code=status.HTTP_204_NO_CONTENT,
-              dependencies=[Depends(_verify_api_key)], response_class=Response)
-    def inject_fault(body: FaultRequest) -> Response:
-        if body.fault_type not in _VALID_FAULTS:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Unknown fault '{body.fault_type}'. Valid: {sorted(_VALID_FAULTS)}",
-            )
-        _sim.inject_fault(body.fault_type)
-        return Response(status_code=204)
-
-    @app.delete("/simulation/fault", status_code=status.HTTP_204_NO_CONTENT,
-                dependencies=[Depends(_verify_api_key)], response_class=Response)
-    def clear_all_faults() -> Response:
-        _sim.clear_faults()
-        return Response(status_code=204)
-
-    # ----- control endpoints -----
+    # ----- audit log (shared by fault injection and control endpoints) -----
 
     _audit_log: list[dict] = []
 
@@ -894,6 +935,37 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
         current_user: dict = Depends(require_admin),
     ) -> list[dict]:
         return list(reversed(_audit_log))[:limit]
+
+    # ----- simulation fault injection (ADMIN; API key additionally required when set) -----
+
+    _VALID_FAULTS = {"utility_loss", "crah_a_trip", "rack_overload", "generator_fail"}
+
+    @app.post("/simulation/fault", status_code=status.HTTP_204_NO_CONTENT,
+              dependencies=[Depends(_verify_api_key)], response_class=Response)
+    def inject_fault(
+        body: FaultRequest,
+        current_user: dict = Depends(require_admin),
+    ) -> Response:
+        if body.fault_type not in _VALID_FAULTS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unknown fault '{body.fault_type}'. Valid: {sorted(_VALID_FAULTS)}",
+            )
+        _sim.inject_fault(body.fault_type, body.duration_s)
+        if body.fault_type == "generator_fail":
+            # A start failure only shows during a mains outage, so the scenario includes one.
+            _sim.inject_fault("utility_loss", body.duration_s)
+        _log_action(current_user, "inject_fault", {"fault": body.fault_type, "duration_s": body.duration_s})
+        return Response(status_code=204)
+
+    @app.delete("/simulation/fault", status_code=status.HTTP_204_NO_CONTENT,
+                dependencies=[Depends(_verify_api_key)], response_class=Response)
+    def clear_all_faults(current_user: dict = Depends(require_admin)) -> Response:
+        _sim.clear_faults()
+        _log_action(current_user, "clear_faults", {})
+        return Response(status_code=204)
+
+    # ----- control endpoints -----
 
     @app.post("/control/crah/setpoint", status_code=200)
     async def set_crah_setpoint(
@@ -993,7 +1065,7 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
         confirm = body.get("confirm")
         if confirm != "SHUTDOWN":
             raise HTTPException(422, 'confirm must equal "SHUTDOWN"')
-        _sim.inject_fault("utility_loss")
+        _sim.inject_fault("utility_loss", MAX_FAULT_DURATION_S)
         _log_action(current_user, "emergency_shutdown", {})
         return {"ok": True, "message": "Emergency shutdown initiated"}
 
@@ -1039,6 +1111,8 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
 
     import bcrypt as _bcrypt
 
+    # Demo directory. Sign-in uses the built-in accounts in the frontend
+    # (apps/web/lib/auth/mock-auth.ts); users added here cannot log in.
     _users_store: list[dict] = [
         {
             "id": "u1",
@@ -1047,6 +1121,7 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
             "role": "ADMIN",
             "status": "active",
             "created_at": 1700000000,
+            "builtin": True,
         },
         {
             "id": "u2",
@@ -1055,6 +1130,7 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
             "role": "OPERATOR",
             "status": "active",
             "created_at": 1700000000,
+            "builtin": True,
         },
     ]
 
@@ -1081,6 +1157,7 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
             "role": body.role,
             "status": "active",
             "created_at": int(_time.time()),
+            "builtin": False,
             "_password_hash": _bcrypt.hashpw(body.password.encode(), _bcrypt.gensalt()).decode(),
         }
         _users_store.append(user)
@@ -1091,11 +1168,14 @@ def create_app(database: Database | None = None, settings: Settings | None = Non
         user_id: str,
         current_user: dict = Depends(require_admin),
     ) -> Response:
-        global _users_store
-        before = len(_users_store)
-        _users_store = [u for u in _users_store if u["id"] != user_id]
-        if len(_users_store) == before:
+        target = next((u for u in _users_store if u["id"] == user_id), None)
+        if target is None:
             raise HTTPException(status_code=404, detail="User not found")
+        if target["email"] == current_user["email"]:
+            raise HTTPException(status_code=409, detail="You cannot remove your own account")
+        if target.get("builtin"):
+            raise HTTPException(status_code=409, detail="Built-in demo accounts cannot be removed")
+        _users_store[:] = [u for u in _users_store if u["id"] != user_id]
         return Response(status_code=204)
 
     return app

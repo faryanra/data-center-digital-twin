@@ -8,6 +8,8 @@ services:
       - "3000:3000"
     environment:
       NEXT_PUBLIC_API_URL: ${API_URL:-http://api:8000}
+      API_BASE_URL: http://api:8000
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set (same value for frontend and api)}
     depends_on:
       api:
         condition: service_healthy
@@ -21,7 +23,9 @@ services:
     environment:
       MQTT_HOST: ${MQTT_HOST:-mosquitto}
       MQTT_PORT: "1883"
+      MODBUS_HOST: 0.0.0.0
       MODBUS_PORT: "5020"
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set (same value for frontend and api)}
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://dc:dc@postgres:5432/dc}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

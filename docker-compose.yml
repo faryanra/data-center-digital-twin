@@ -28,7 +28,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-smarthome}:${POSTGRES_PASSWORD:-smarthome}@postgres:5432/${POSTGRES_DB:-smarthome}
       MQTT_HOST: ${MQTT_HOST:-localhost}
       MQTT_PORT: ${MQTT_PORT:-1883}
+      MODBUS_HOST: 0.0.0.0
       MODBUS_PORT: "5020"
+      JWT_SECRET: ${JWT_SECRET:-dev-insecure-change-me}
       API_HOST: 0.0.0.0
       API_PORT: 8000
       API_KEY: ${API_KEY:-}
