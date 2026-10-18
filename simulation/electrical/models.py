@@ -202,7 +202,9 @@ class FacilitySnapshot:
     pdus: list[PDUState]
     cooling: CoolingLoad
     utility_online: bool = True
-    generator_state: str = "STANDBY"   # STANDBY | STARTING | TRANSFERRED | RECOVERY
+    generator_state: str = "STANDBY"   # STANDBY | STARTING | TRANSFERRED | RECOVERY | FAULT
+    power_source: str = "UTILITY"      # UTILITY | GENERATOR | BATTERY
+    active_faults: list[dict] = field(default_factory=list)
     generator_fuel_pct: float = 87.0
     per_hall_cooling_kw: dict[str, float] = field(
         default_factory=lambda: {"data_hall_a": 500.0, "data_hall_b": 500.0}
@@ -221,7 +223,10 @@ class FacilitySnapshot:
 
     @property
     def total_facility_power_w(self) -> float:
-        return self.ups.input_power_w + self.cooling.cooling_power_w
+        # Facility demand does not depend on the source: on battery the UPS
+        # draws nothing from the grid but still delivers its output at the
+        # same conversion efficiency, so PUE must not collapse below 1.
+        return self.ups.output_load_w / self.ups.efficiency + self.cooling.cooling_power_w
 
     @property
     def pue(self) -> float:

@@ -26,7 +26,23 @@ from simulation.electrical.models import (
 # ASHRAE A1 class recommended envelope
 RACK_INLET_WARN_C = 27.0
 RACK_INLET_CRITICAL_C = 35.0
-RACK_INLET_AMBIENT_C = 22.0  # baseline cold-aisle temperature
+RACK_INLET_AMBIENT_C = 22.0  # default CRAH supply-air setpoint
+
+# Room-level (environment sensor) thresholds — fixed, independent of the setpoint.
+ZONE_TEMP_WARN_C = 27.0
+ZONE_TEMP_CRITICAL_C = 32.0
+
+# Inlet rise above supply air per 100 kW of hall IT heat at full cooling capacity.
+THERMAL_GAIN_C_PER_100KW = 6.0
+HALL_COOLING_NOMINAL_KW = 500.0
+
+COOLING_MODE_SETPOINTS_C = {"NORMAL": 22.0, "ECONOMY": 24.0, "EMERGENCY": 18.0}
+
+# Injected faults are shared by every viewer, so they must always expire.
+MAX_FAULT_DURATION_S = 120.0
+
+OVERLOAD_RACKS = ("rack-a06", "rack-a07", "rack-a08", "rack-a09", "rack-a10")
+OVERLOAD_LOAD_FACTOR = 1.3
 
 
 class FacilitySimulator:
@@ -38,12 +54,23 @@ class FacilitySimulator:
     def __init__(self) -> None:
         self._tick: int = 0
         self._snapshot: Optional[FacilitySnapshot] = None
-        self._faults: set[str] = set()
+        # fault name -> expiry epoch seconds (None = until cleared explicitly)
+        self._faults: dict[str, float | None] = {}
         self._state = self._build_initial_state()
         self._gen_state: str = "STANDBY"
         self._gen_state_entered_at: float = 0.0
-        self._hall_cooling: dict[str, float] = {"data_hall_a": 500.0, "data_hall_b": 500.0}
-        self._crah_setpoint_c: float = 22.0
+        self._gen_failed: bool = False
+        self._power_source: str = "UTILITY"
+        self._hall_cooling: dict[str, float] = {
+            "data_hall_a": HALL_COOLING_NOMINAL_KW, "data_hall_b": HALL_COOLING_NOMINAL_KW,
+        }
+        self._crah_setpoint_c: float = RACK_INLET_AMBIENT_C
+        # Rack loads drift around their initial value instead of random-walking away.
+        self._anchor_loads = {r.id: r.load_factor for p in self._state["pdus"] for r in p.racks}
+        self._base_loads = dict(self._anchor_loads)
+        self._env_anchor = {
+            z.id: (z.temp_c, z.humidity_pct) for z in self._state["environment"].zones
+        }
 
     # ------------------------------------------------------------------
     # Public API
@@ -51,7 +78,9 @@ class FacilitySimulator:
 
     def tick(self) -> FacilitySnapshot:
         """Advance simulation one step. Returns updated snapshot."""
-        self._tick_generator(time.time())
+        now = time.time()
+        self._expire_faults(now)
+        self._tick_generator(now)
         self._tick += 1
         self._evolve_loads()
         self._apply_thermal_model()
@@ -66,21 +95,39 @@ class FacilitySimulator:
     def snapshot(self) -> Optional[FacilitySnapshot]:
         return self._snapshot
 
-    def inject_fault(self, fault: str) -> None:
+    def inject_fault(self, fault: str, duration_s: float | None = None) -> None:
         """
         Supported faults:
           utility_loss    — grid goes down, UPS switches to battery
           crah_a_trip     — CRAH-A01 offline, Data Hall A cooling degrades
-          rack_overload   — Rack A07 load jumps to 95%
+          rack_overload   — racks A06–A10 ramp to 130 % of rated power
           generator_fail  — generator won't start during utility_loss
+
+        With duration_s the fault expires on its own (capped at
+        MAX_FAULT_DURATION_S); without it, it lasts until cleared.
         """
-        self._faults.add(fault)
+        expires_at = None
+        if duration_s is not None:
+            duration = max(1.0, min(float(duration_s), MAX_FAULT_DURATION_S))
+            expires_at = time.time() + duration
+        self._faults[fault] = expires_at
 
     def clear_fault(self, fault: str) -> None:
-        self._faults.discard(fault)
+        self._faults.pop(fault, None)
 
     def clear_faults(self) -> None:
         self._faults.clear()
+
+    def active_faults(self) -> list[dict]:
+        now = time.time()
+        return [
+            {
+                "fault": name,
+                "expires_at": expires_at,
+                "remaining_s": None if expires_at is None else max(0, round(expires_at - now)),
+            }
+            for name, expires_at in sorted(self._faults.items())
+        ]
 
     def get_snapshot(self) -> FacilitySnapshot:
         if self._snapshot is None:
@@ -98,10 +145,17 @@ class FacilitySimulator:
     # Internal
     # ------------------------------------------------------------------
 
+    def _expire_faults(self, now: float) -> None:
+        for name, expires_at in list(self._faults.items()):
+            if expires_at is not None and expires_at <= now:
+                del self._faults[name]
+
     def _tick_generator(self, now: float) -> None:
         utility_lost = "utility_loss" in self._faults
         gen_fail     = "generator_fail" in self._faults
         elapsed      = now - self._gen_state_entered_at
+        # A start attempt that fails is reported as FAULT; a disarmed generator is not.
+        self._gen_failed = utility_lost and gen_fail and self._state["gen_auto_start"]
 
         if self._gen_state == "STANDBY":
             if utility_lost and not gen_fail and self._state["gen_auto_start"]:
@@ -214,20 +268,22 @@ class FacilitySimulator:
         }
 
     def _evolve_loads(self) -> None:
-        """Small load drift each tick — simulates workload variation."""
+        """Small mean-reverting load drift each tick — simulates workload variation."""
+        overloaded = "rack_overload" in self._faults
         for pdu in self._state["pdus"]:
             for rack in pdu.racks:
                 if rack.status == "OFFLINE":
                     continue
-                drift = random.gauss(0, 0.005)   # σ = 0.5% per tick
-                rack.load_factor = max(0.1, min(0.95,
-                                                rack.load_factor + drift))
+                base = self._base_loads[rack.id]
+                base += (self._anchor_loads[rack.id] - base) * 0.02 + random.gauss(0, 0.005)
+                base = max(0.1, min(0.95, base))
+                self._base_loads[rack.id] = base
 
-        # Fault: rack overload
-        if "rack_overload" in self._faults:
-            rack = self.get_rack("rack-a07")
-            if rack:
-                rack.load_factor = min(0.95, rack.load_factor + 0.02)
+                if overloaded and rack.id in OVERLOAD_RACKS:
+                    # Ramp past nameplate so the fault is visible within a few ticks.
+                    rack.load_factor = min(OVERLOAD_LOAD_FACTOR, rack.load_factor + 0.15)
+                else:
+                    rack.load_factor = base
 
     def _apply_thermal_model(self) -> None:
         """
@@ -239,8 +295,8 @@ class FacilitySimulator:
 
         # Per-hall cooling capacity (kW)
         hall_cooling: dict[str, float] = {
-            "data_hall_a": 500.0,
-            "data_hall_b": 500.0,
+            "data_hall_a": HALL_COOLING_NOMINAL_KW,
+            "data_hall_b": HALL_COOLING_NOMINAL_KW,
         }
         if "crah_a_trip" in self._faults:
             hall_cooling["data_hall_a"] *= 0.20   # one CRAH offline — 80% capacity loss
@@ -255,14 +311,15 @@ class FacilitySimulator:
 
         for pdu in self._state["pdus"]:
             hall_key = pdu.location.replace("-", "_")  # "data-hall-a" → "data_hall_a"
-            hall_cap_kw = hall_cooling.get(hall_key, 500.0)
-            capacity_factor = hall_cap_kw / 500.0
+            hall_cap_kw = hall_cooling.get(hall_key, HALL_COOLING_NOMINAL_KW)
+            capacity_factor = hall_cap_kw / HALL_COOLING_NOMINAL_KW
 
             hall_heat_w = sum(r.heat_output_w for r in pdu.racks
                               if r.status != "OFFLINE")
 
-            base_temp = RACK_INLET_AMBIENT_C
-            load_contribution = (hall_heat_w / 100_000) * 8
+            # Cold-aisle air leaves the CRAHs at the setpoint; recirculation adds the rest.
+            base_temp = self._crah_setpoint_c
+            load_contribution = (hall_heat_w / 100_000) * THERMAL_GAIN_C_PER_100KW
             cooling_factor = 1.0 if capacity_factor >= 1.0 else (
                 1.0 + (1.0 - capacity_factor) * 2.5
             )
@@ -292,11 +349,13 @@ class FacilitySimulator:
             if r.status != "OFFLINE"
         )
         cooling.total_it_heat_w = total_heat
-        cooling.cooling_power_w = total_heat * 0.40 * (
+        # Colder supply air costs chiller energy (~4 % per °C below 22 °C) and vice versa.
+        setpoint_factor = max(0.7, 1.0 + (RACK_INLET_AMBIENT_C - self._crah_setpoint_c) * 0.04)
+        cooling.cooling_power_w = total_heat * 0.40 * setpoint_factor * (
             1.0 + (1.0 - global_cap_factor) * 0.3
         )
-        cooling.supply_temp_c = 18.0
-        cooling.return_temp_c = 18.0 + (total_heat / 150_000) * 15
+        cooling.supply_temp_c = self._crah_setpoint_c
+        cooling.return_temp_c = self._crah_setpoint_c + (total_heat / 150_000) * 15
 
     def _apply_electrical_model(self) -> None:
         """
@@ -313,15 +372,20 @@ class FacilitySimulator:
 
         # Utility fault
         if "utility_loss" in self._faults:
-            ups.input_voltage_v = 0.0
             if self._gen_state == "TRANSFERRED":
-                ups.mode = "BYPASS"
+                # The generator feeds the UPS input, so the UPS stays on-line and recharges.
+                self._power_source = "GENERATOR"
+                ups.input_voltage_v = 400.0 + random.gauss(0, 1.0)
+                ups.mode = "BYPASS" if self._state["ups_bypass_enabled"] else "NORMAL"
                 ups.battery_soc = min(1.0, ups.battery_soc + 0.0005)
             else:
+                self._power_source = "BATTERY"
+                ups.input_voltage_v = 0.0
                 ups.mode = "BATTERY"
                 drain_rate = ups.output_load_w / (ups.rated_kw * 1000 * 3600 * 0.5)
                 ups.battery_soc = max(0.0, ups.battery_soc - drain_rate)
         else:
+            self._power_source = "UTILITY"
             ups.input_voltage_v = 400.0 + random.gauss(0, 0.5)
             # Keep a deliberately-engaged maintenance bypass across ticks; only
             # auto-recover BATTERY (or a stale BYPASS) back to NORMAL.
@@ -365,16 +429,19 @@ class FacilitySimulator:
             "env-hall-b": "data-hall-b",
         }
         for zone in env.zones:
+            anchor_temp, anchor_rh = self._env_anchor[zone.id]
             hall_key = zone_hall_map.get(zone.id)
-            target_temp = hall_temps.get(hall_key, zone.temp_c) if hall_key else zone.temp_c
+            target_temp = hall_temps.get(hall_key, anchor_temp) if hall_key else anchor_temp
             zone.temp_c += (target_temp - zone.temp_c) * 0.15 + random.gauss(0, 0.05)
-            zone.humidity_pct = max(20.0, min(80.0, zone.humidity_pct + random.gauss(0, 0.1)))
+            zone.humidity_pct = max(20.0, min(80.0,
+                zone.humidity_pct + (anchor_rh - zone.humidity_pct) * 0.05 + random.gauss(0, 0.1)))
             zone.airflow_mps = max(0.1, zone.airflow_mps + random.gauss(0, 0.02))
 
-            setpoint = self._crah_setpoint_c
-            if zone.temp_c > setpoint + 8:
+            # Alarm thresholds are absolute — changing the setpoint moves the
+            # temperature, never the threshold.
+            if zone.temp_c >= ZONE_TEMP_CRITICAL_C:
                 zone.status = "CRITICAL"
-            elif zone.temp_c > setpoint + 4:
+            elif zone.temp_c >= ZONE_TEMP_WARN_C:
                 zone.status = "WARNING"
             else:
                 zone.status = "NORMAL"
@@ -450,12 +517,7 @@ class FacilitySimulator:
         return False
 
     def set_cooling_mode(self, mode: str) -> None:
-        if mode == "ECONOMY":
-            self._crah_setpoint_c = 26.0
-        elif mode == "EMERGENCY":
-            self._crah_setpoint_c = 18.0
-        else:  # NORMAL
-            self._crah_setpoint_c = 22.0
+        self._crah_setpoint_c = COOLING_MODE_SETPOINTS_C.get(mode, RACK_INLET_AMBIENT_C)
 
     def _build_snapshot(self) -> FacilitySnapshot:
         ups = self._state["ups"]
@@ -467,7 +529,9 @@ class FacilitySimulator:
             pdus=pdus,
             cooling=cooling,
             utility_online="utility_loss" not in self._faults,
-            generator_state=self._gen_state,
+            generator_state="FAULT" if self._gen_failed else self._gen_state,
+            power_source=self._power_source,
+            active_faults=self.active_faults(),
             per_hall_cooling_kw=dict(self._hall_cooling),
             fire_safety=self._state["fire_safety"],
             access_control=self._state["access_control"],

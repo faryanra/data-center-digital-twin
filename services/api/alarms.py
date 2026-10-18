@@ -96,6 +96,13 @@ class AlarmManager:
                 key=lambda a: a.raised_at, reverse=True,
             )
 
+    def list_acknowledged(self) -> list[Alarm]:
+        with self._lock:
+            return sorted(
+                [a for a in self._alarms.values() if a.state == AlarmState.ACKNOWLEDGED],
+                key=lambda a: a.raised_at, reverse=True,
+            )
+
     def list_all(self) -> list[Alarm]:
         with self._lock:
             return sorted(self._alarms.values(), key=lambda a: a.raised_at, reverse=True)
