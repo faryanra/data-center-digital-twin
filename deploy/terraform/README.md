@@ -1,62 +1,44 @@
-# Terraform — DC-NORTH-01 Infrastructure
+# Terraform — EC2 reference (untested)
 
-Infrastructure-as-Code for deploying DC-NORTH-01 Digital Twin to AWS.
+> **Status: reference only — never applied.** This configuration has not been
+> run against a real AWS account. Review it before use and expect to adjust it.
+> The supported deployment is Render + Neon + Vercel ([`../DEPLOY.md`](../DEPLOY.md));
+> for a single VM, [`../ec2-bootstrap.sh`](../ec2-bootstrap.sh) builds the stack
+> from source with Docker Compose.
 
-## Configurations
+## What it provisions
 
-Two deployment targets are available:
+| File | Contents |
+|------|----------|
+| `main.tf` | VPC, public subnet, security group and one EC2 instance |
+| `userdata.sh.tpl` | First-boot script: installs Docker, pulls the API and frontend images, starts them with Compose |
+| `variables.tf` | Inputs (below) |
+| `outputs.tf` | `instance_public_ip`, `instance_public_dns`, `frontend_url`, `api_url` |
 
-| File | Target | Notes |
-|------|--------|-------|
-| `main.tf` | EC2 single-instance | Low cost, single AZ — suitable for demo and staging |
-| `outputs.tf` | Shared outputs | ALB DNS, ECR URLs, RDS endpoint |
-| `variables.tf` | Input variables | See below |
-| `userdata.sh.tpl` | EC2 bootstrap | Installs Docker, pulls images, starts compose |
-
-## EC2 deployment
-
-Provisions a single EC2 instance (default `t3.medium`) running Docker Compose:
-
-- Installs Docker + Docker Compose on first boot via `userdata.sh.tpl`
-- Pulls images from GitHub Container Registry (`ghcr.io/faryanra/data-center-digital-twin`)
-- Starts `docker-compose.prod.yml` with environment variables from SSM Parameter Store
-
-## ECS Fargate (planned)
-
-A Fargate configuration is planned for production HA deployments:
-
-- Frontend: 0.25 vCPU / 512 MB, behind ALB
-- API: 0.5 vCPU / 1 GB, auto-scaling on CPU > 70%
-- RDS PostgreSQL 16 (Multi-AZ optional)
-- ElastiCache for session caching (optional)
+The user-data pulls `ghcr.io/faryanra/data-center-digital-twin/{api,frontend}:<image_tag>`.
+No workflow publishes those images any more, so build and push them yourself first
+(`docker build -f Dockerfile .` and `docker build -f apps/web/Dockerfile .`).
+The generated compose file does not set `JWT_SECRET`; add it (same value for both
+services) before relying on authentication.
 
 ## Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `aws_region` | `eu-north-1` | AWS region |
-| `instance_type` | `t3.medium` | EC2 instance type |
-| `key_name` | — | EC2 SSH key pair name (required) |
-| `allowed_cidr` | `0.0.0.0/0` | CIDR allowed to reach port 3000/8000 |
-| `postgres_password` | — | RDS/container password (required, sensitive) |
+| Variable | Description |
+|----------|-------------|
+| `aws_region` | AWS region (default `eu-north-1`) |
+| `instance_type` | EC2 instance type |
+| `key_name` | EC2 SSH key pair name (required) |
+| `allowed_cidr` | CIDR allowed to reach ports 3000/8000 |
+| `ami_id` | AMI to launch |
+| `image_tag` | Container image tag to pull |
 
 ## Usage
 
 ```bash
 cd deploy/terraform
 terraform init
-terraform plan -var="key_name=my-key" -var="postgres_password=s3cr3t"
+terraform plan -var="key_name=my-key"
 terraform apply
 ```
 
-After apply, the ALB DNS name is printed as the `frontend_url` output.
-
-## Secrets
-
-Never commit `.tfvars` files containing real passwords or keys.
-Use SSM Parameter Store or AWS Secrets Manager for production secrets:
-
-```bash
-aws ssm put-parameter --name /dc-north-01/postgres_password \
-  --value "s3cr3t" --type SecureString
-```
+Never commit `.tfvars` files that contain real keys or passwords.

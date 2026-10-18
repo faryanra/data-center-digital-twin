@@ -20,7 +20,7 @@ simulation/        Facility model + physics engine
 common/            Shared Python modules
 config/            Device profiles, Mosquitto, server configs
 infrastructure/    Prometheus, Grafana, Mosquitto Docker configs
-infra/terraform/   ECS Fargate Terraform
+deploy/terraform/  EC2 Terraform (reference, untested)
 docs/              Architecture docs, ADRs
 ```
 
