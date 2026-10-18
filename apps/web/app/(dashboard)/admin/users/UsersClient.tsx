@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useAuth } from '@/lib/auth/context';
 
 const API = '/api/proxy';
 
@@ -14,6 +15,7 @@ interface UserRecord {
   role: UserRole;
   status: UserStatus;
   created_at: number;
+  builtin: boolean;
 }
 
 interface AddUserForm {
@@ -48,6 +50,7 @@ const LABEL_STYLE: React.CSSProperties = {
 };
 
 export function UsersClient() {
+  const { user: me } = useAuth();
   const [users, setUsers]         = useState<UserRecord[]>([]);
   const [loading, setLoading]     = useState(true);
   const [showAdd, setShowAdd]     = useState(false);
@@ -98,11 +101,18 @@ export function UsersClient() {
   async function handleDelete() {
     if (!deleteTarget) return;
     setDeleting(true);
+    setError(null);
     try {
-      await fetch(`${API}/users/${deleteTarget.id}`, { method: 'DELETE' });
+      const res = await fetch(`${API}/users/${deleteTarget.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { detail?: string };
+        setError(body.detail ?? `Could not remove user (HTTP ${res.status})`);
+      }
       setDeleteTarget(null);
       await fetchUsers();
-    } catch { /* offline */ } finally {
+    } catch {
+      setError('Network error — try again');
+    } finally {
       setDeleting(false);
     }
   }
@@ -114,11 +124,11 @@ export function UsersClient() {
   return (
     <div className="page-content">
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', margin: 0 }}>Users</h1>
           <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
-            DC-NORTH-01 · access management
+            DC-NORTH-01 · demo user directory
           </p>
         </div>
         <button
@@ -132,6 +142,23 @@ export function UsersClient() {
           + Add User
         </button>
       </div>
+
+      <div style={{
+        padding: '10px 14px', borderRadius: 6, fontSize: 13, color: 'var(--muted)',
+        background: 'rgba(37,99,235,0.05)', border: '1px solid rgba(37,99,235,0.2)',
+      }}>
+        Demo directory: accounts added here are stored in memory and are <strong style={{ color: 'var(--text)' }}>not
+        used for sign-in</strong>. Sign-in uses the two built-in demo accounts, which cannot be removed.
+      </div>
+
+      {error && !showAdd && (
+        <div role="alert" style={{
+          padding: '10px 14px', borderRadius: 6, fontSize: 13, color: '#DC2626',
+          background: 'rgba(220,38,38,0.06)', border: '1px solid rgba(220,38,38,0.3)',
+        }}>
+          {error}
+        </div>
+      )}
 
       {/* User table */}
       {loading ? (
@@ -182,18 +209,22 @@ export function UsersClient() {
                       {u.status}
                     </span>
                   </td>
-                  <td style={{ color: 'var(--muted)' }}>{timeAgo(u.created_at * 1000)}</td>
+                  <td style={{ color: 'var(--muted)' }}>
+                    {u.builtin ? 'Built-in' : timeAgo(u.created_at * 1000)}
+                  </td>
                   <td>
-                    <button
-                      onClick={() => setDeleteTarget(u)}
-                      style={{
-                        padding: '4px 10px', borderRadius: 4, fontSize: 12,
-                        border: '1px solid rgba(220,38,38,0.35)',
-                        background: 'transparent', color: '#DC2626', cursor: 'pointer',
-                      }}
-                    >
-                      Remove
-                    </button>
+                    {!u.builtin && u.email !== me?.email && (
+                      <button
+                        onClick={() => setDeleteTarget(u)}
+                        style={{
+                          padding: '4px 10px', borderRadius: 4, fontSize: 12,
+                          border: '1px solid rgba(220,38,38,0.35)',
+                          background: 'transparent', color: '#DC2626', cursor: 'pointer',
+                        }}
+                      >
+                        Remove
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

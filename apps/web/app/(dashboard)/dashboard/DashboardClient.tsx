@@ -8,7 +8,7 @@ import {
 import { useFacilitySocket, getSnapshotCache } from '@/hooks/useFacilitySocket';
 // NOTE: getSnapshotCache() seeds the trend chart from cached snapshots so a
 // full page reload shows history immediately instead of an empty chart.
-import type { AlarmRow, WsHallState } from '@dctwin/types';
+import type { AlarmRow, WsFacilitySnapshot, WsHallState } from '@dctwin/types';
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -54,11 +54,65 @@ function KpiSparkline({ data, color = 'var(--accent)' }: { data: number[]; color
 
 interface TrendPoint { t: string; itLoad: number; total: number; pue: number }
 
-// ── Hall status helper ─────────────────────────────────────────────────────────
+// ── Status helpers ─────────────────────────────────────────────────────────────
 
-function deriveHallStatus(hall: WsHallState): string {
-  if (hall.avg_inlet_c > 30) return 'WARN';
-  return 'OK';
+const OK = '#16A34A';
+const WARN = '#D97706';
+const CRIT = '#DC2626';
+const MUTED = '#6B7280';
+
+const STATUS_COLOR: Record<WsHallState['status'], string> = { OK, WARNING: WARN, CRITICAL: CRIT };
+
+interface StatusRow { label: string; value: string; color: string }
+
+// Every Facility Status row is derived from the live snapshot — nothing is assumed.
+function facilityStatusRows(s: WsFacilitySnapshot | null): StatusRow[] {
+  if (!s) {
+    return ['Power Source', 'Generator', 'UPS Mode', 'Cooling', 'Fire Safety', 'Access']
+      .map(label => ({ label, value: '—', color: MUTED }));
+  }
+  const source = s.power_source;
+  const gen = s.generator_state;
+  const upsMode = s.ups?.[0]?.mode;
+  const { crah_online, crah_total } = s.cooling;
+  const zones = s.fire_safety?.zones ?? [];
+  const doors = s.access_control?.doors ?? [];
+  const openSecureDoors = doors.filter(d => d.badge_required && !d.locked).length;
+
+  return [
+    {
+      label: 'Power Source',
+      value: source,
+      color: source === 'UTILITY' ? OK : source === 'GENERATOR' ? WARN : CRIT,
+    },
+    {
+      label: 'Generator',
+      value: gen,
+      color: gen === 'FAULT' ? CRIT : gen === 'STANDBY' ? MUTED : gen === 'TRANSFERRED' ? OK : WARN,
+    },
+    {
+      label: 'UPS Mode',
+      value: upsMode ?? '—',
+      color: upsMode === 'NORMAL' ? OK : upsMode === 'BATTERY' || upsMode === 'FAULT' ? CRIT : WARN,
+    },
+    {
+      label: 'Cooling',
+      value: crah_online === crah_total ? 'NORMAL' : `DEGRADED ${crah_online}/${crah_total}`,
+      color: crah_online === crah_total ? OK : crah_online === 0 ? CRIT : WARN,
+    },
+    zones.some(z => z.status === 'ALARM')
+      ? { label: 'Fire Safety', value: 'ALARM', color: CRIT }
+      : zones.some(z => z.status === 'SUPPRESSING')
+        ? { label: 'Fire Safety', value: 'SUPPRESSING', color: WARN }
+        : s.fire_safety && !s.fire_safety.system_armed
+          ? { label: 'Fire Safety', value: 'DISARMED', color: WARN }
+          : { label: 'Fire Safety', value: 'ARMED', color: OK },
+    s.access_control?.intrusion_detected
+      ? { label: 'Access', value: 'INTRUSION', color: CRIT }
+      : openSecureDoors > 0
+        ? { label: 'Access', value: `${openSecureDoors} SECURE DOOR${openSecureDoors > 1 ? 'S' : ''} OPEN`, color: WARN }
+        : { label: 'Access', value: 'SECURED', color: OK },
+  ];
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
@@ -234,15 +288,15 @@ export function DashboardClient() {
         </div>
       </div>
 
-      {/* ── 2-column layout ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
+      {/* ── 2-column layout (stacks on narrow screens) ── */}
+      <div className="dash-grid">
 
         {/* LEFT COLUMN */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
 
           {/* Live Power Trend */}
           <div className="card" style={{ padding: '20px 24px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Live Power Trend</div>
                 <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
@@ -330,9 +384,8 @@ export function DashboardClient() {
               </thead>
               <tbody>
                 {(snapshot?.halls ?? []).map((hall: WsHallState) => {
-                  const temp = hall.avg_inlet_c;
-                  const tempColor = temp > 30 ? '#DC2626' : temp > 27 ? '#D97706' : 'var(--text)';
-                  const status = deriveHallStatus(hall);
+                  const status = hall.status;
+                  const tempColor = status === 'OK' ? 'var(--text)' : STATUS_COLOR[status];
                   return (
                     <tr key={hall.id}>
                       <td style={{ fontWeight: 600 }}>{hall.name}</td>
@@ -345,8 +398,8 @@ export function DashboardClient() {
                       <td>
                         <span style={{
                           padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700,
-                          background: status === 'OK' ? 'rgba(22,163,74,0.1)' : 'rgba(217,119,6,0.1)',
-                          color: status === 'OK' ? '#16A34A' : '#D97706',
+                          background: `${STATUS_COLOR[status]}1A`,
+                          color: STATUS_COLOR[status],
                         }}>
                           {status}
                         </span>
@@ -451,28 +504,13 @@ export function DashboardClient() {
             }}>
               Facility Status
             </div>
-            {([
-              {
-                label: 'Generator',
-                value: snapshot?.generator_state ?? '—',
-                color: snapshot?.generator_state === 'STANDBY' ? '#6B7280' : '#16A34A',
-              },
-              {
-                label: 'UPS Mode',
-                value: snapshot?.ups?.[0]?.mode ?? '—',
-                color: snapshot?.ups?.[0]?.mode === 'NORMAL' ? '#16A34A'
-                  : snapshot?.ups?.[0]?.mode === 'BATTERY' ? '#DC2626' : '#D97706',
-              },
-              { label: 'Cooling',    value: 'NORMAL', color: '#16A34A' },
-              { label: 'Fire Safety', value: 'ARMED',  color: '#16A34A' },
-              { label: 'Access',     value: 'LOCKED', color: '#16A34A' },
-            ] as { label: string; value: string; color: string }[]).map(item => (
+            {facilityStatusRows(snapshot).map(item => (
               <div key={item.label} style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
                 padding: '8px 0', borderBottom: '1px solid var(--border)',
               }}>
                 <span style={{ fontSize: 13, color: 'var(--muted)' }}>{item.label}</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: item.color }}>{item.value}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: item.color, textAlign: 'right' }}>{item.value}</span>
               </div>
             ))}
           </div>
@@ -525,8 +563,8 @@ export function DashboardClient() {
             </div>
             {([
               { name: 'UPS-01',         ok: snapshot?.ups?.[0]?.mode === 'NORMAL' },
-              { name: 'Generator',      ok: snapshot?.generator_state !== 'RECOVERY' },
-              { name: 'CRAH Units',     ok: true },
+              { name: 'Generator',      ok: snapshot?.generator_state !== 'FAULT' },
+              { name: 'CRAH Units',     ok: snapshot ? snapshot.cooling.crah_online === snapshot.cooling.crah_total : true },
               { name: 'Fire Detection', ok: !(snapshot?.fire_safety?.zones.some(z => z.status === 'ALARM')) },
               { name: 'Access Control', ok: !(snapshot?.access_control?.intrusion_detected) },
               { name: 'Power Dist.',    ok: !(snapshot?.power_distribution?.branches.some(b => !b.breaker_on)) },
@@ -544,7 +582,7 @@ export function DashboardClient() {
                     width: 6, height: 6, borderRadius: '50%',
                     background: sub.ok ? '#16A34A' : '#DC2626',
                   }} />
-                  {sub.ok ? 'Normal' : 'Fault'}
+                  {sub.ok ? 'Normal' : 'Attention'}
                 </span>
               </div>
             ))}

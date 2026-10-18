@@ -15,40 +15,14 @@ const SECTIONS = [
 
 type SectionId = typeof SECTIONS[number]['id'];
 
-// ── Thresholds ────────────────────────────────────────────────────────────────
+// ── Thresholds (read-only — served by GET /thresholds, used by the alarm evaluator) ──
 
-const DEFAULT_THRESHOLDS = {
-  rackInletWarn:    28,
-  rackInletCrit:    32,
-  pueWarn:           1.8,
-  pueCrit:           2.2,
-  upsCapacityWarn:  80,
-  upsCapacityCrit:  90,
-  batteryWarn:      30,
-  batteryCrit:      10,
-  humidityWarn:     65,
-  humidityCrit:     75,
-};
-
-type Thresholds = typeof DEFAULT_THRESHOLDS;
-type ThresholdKey = keyof Thresholds;
-
-interface ThresholdRow {
-  key: string;
+interface ThresholdEntry {
   label: string;
-  warnKey: ThresholdKey;
-  critKey: ThresholdKey;
   unit: string;
-  step: number;
+  warning: number | null;
+  critical: number | null;
 }
-
-const THRESHOLD_ROWS: ThresholdRow[] = [
-  { key: 'rackInlet',   label: 'Rack Inlet Temp', warnKey: 'rackInletWarn',   critKey: 'rackInletCrit',   unit: '°C',   step: 0.5 },
-  { key: 'pue',         label: 'PUE',             warnKey: 'pueWarn',         critKey: 'pueCrit',         unit: 'ratio',step: 0.1 },
-  { key: 'upsCapacity', label: 'UPS Load',        warnKey: 'upsCapacityWarn', critKey: 'upsCapacityCrit', unit: '%',    step: 1 },
-  { key: 'battery',     label: 'Battery Level',   warnKey: 'batteryWarn',     critKey: 'batteryCrit',     unit: '%',    step: 1 },
-  { key: 'humidity',    label: 'Humidity',        warnKey: 'humidityWarn',    critKey: 'humidityCrit',    unit: '%',    step: 1 },
-];
 
 // ── Notifications ─────────────────────────────────────────────────────────────
 
@@ -137,30 +111,25 @@ export function SettingsClient() {
   const { user } = useAuth();
 
   const [section, setSection]         = useState<SectionId>('thresholds');
-  const [thresholds, setThresholds]   = useState<Thresholds>(DEFAULT_THRESHOLDS);
+  const [thresholds, setThresholds]   = useState<Record<string, ThresholdEntry> | null>(null);
+  const [thresholdError, setThresholdError] = useState(false);
   const [notifPrefs, setNotifPrefs]   = useState<NotificationPrefs>(DEFAULT_NOTIFICATIONS);
   const [showSavedToast, setToast]    = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load persisted state on mount
   useEffect(() => {
-    setThresholds(safeLocalStorage('dc-thresholds', DEFAULT_THRESHOLDS));
     setNotifPrefs(safeLocalStorage('dc-notifications', DEFAULT_NOTIFICATIONS));
+    fetch('/api/proxy/thresholds', { cache: 'no-store' })
+      .then(res => (res.ok ? res.json() as Promise<Record<string, ThresholdEntry>> : Promise.reject()))
+      .then(setThresholds)
+      .catch(() => setThresholdError(true));
   }, []);
 
   function flashToast() {
     setToast(true);
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(false), 2000);
-  }
-
-  function setThreshold(key: ThresholdKey, value: number) {
-    setThresholds(prev => {
-      const next = { ...prev, [key]: value };
-      safeLocalStorageSet('dc-thresholds', next);
-      return next;
-    });
-    flashToast();
   }
 
   function setNotifPref<K extends keyof NotificationPrefs>(key: K, value: NotificationPrefs[K]) {
@@ -185,62 +154,39 @@ export function SettingsClient() {
         <div style={{ marginBottom: 16 }}>
           <h2 style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', margin: 0 }}>Alert Thresholds</h2>
           <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-            Changes are saved automatically and persist across sessions.
+            Display only — these are the limits the backend alarm evaluator uses, the same
+            values behind every hall status and alarm in the UI. They are defined in{' '}
+            <code style={{ fontSize: 12 }}>services/api/alarm_evaluator.py</code>.
           </p>
         </div>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ borderBottom: '1px solid var(--border)' }}>
-              {['Metric', 'Warning', 'Critical', 'Unit'].map(h => (
-                <th key={h} style={{
-                  padding: '8px 12px', textAlign: 'left', fontSize: 11,
-                  fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                }}>
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {THRESHOLD_ROWS.map(row => (
-              <tr key={row.key} style={{ borderBottom: '1px solid var(--border)' }}>
-                <td style={{ padding: '10px 12px', fontSize: 14, color: 'var(--text)' }}>
-                  {row.label}
-                </td>
-                <td style={{ padding: '8px 12px' }}>
-                  <input
-                    type="number"
-                    value={thresholds[row.warnKey]}
-                    step={row.step}
-                    onChange={e => setThreshold(row.warnKey, +e.target.value)}
-                    style={{
-                      width: 80, padding: '6px 8px', border: '1px solid var(--border)',
-                      borderRadius: 2, background: 'var(--surface)', color: '#D97706',
-                      fontWeight: 600, fontSize: 14, textAlign: 'center',
-                    }}
-                  />
-                </td>
-                <td style={{ padding: '8px 12px' }}>
-                  <input
-                    type="number"
-                    value={thresholds[row.critKey]}
-                    step={row.step}
-                    onChange={e => setThreshold(row.critKey, +e.target.value)}
-                    style={{
-                      width: 80, padding: '6px 8px', border: '1px solid var(--border)',
-                      borderRadius: 2, background: 'var(--surface)', color: '#DC2626',
-                      fontWeight: 600, fontSize: 14, textAlign: 'center',
-                    }}
-                  />
-                </td>
-                <td style={{ padding: '10px 12px', fontSize: 13, color: 'var(--muted)' }}>
-                  {row.unit}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {thresholdError ? (
+          <div style={{ fontSize: 13, color: '#DC2626' }}>Couldn’t load thresholds from the backend.</div>
+        ) : !thresholds ? (
+          <div style={{ fontSize: 13, color: 'var(--muted)' }}>Loading…</div>
+        ) : (
+          <div className="table-card">
+            <table>
+              <thead>
+                <tr>
+                  {['Metric', 'Warning', 'Critical'].map(h => <th key={h}>{h}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(thresholds).map(([key, t]) => (
+                  <tr key={key}>
+                    <td>{t.label}</td>
+                    <td style={{ color: '#D97706', fontWeight: 600 }}>
+                      {t.warning === null ? '—' : `${t.warning} ${t.unit}`}
+                    </td>
+                    <td style={{ color: '#DC2626', fontWeight: 600 }}>
+                      {t.critical === null ? '—' : `${t.critical} ${t.unit}`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     );
   }
@@ -251,7 +197,7 @@ export function SettingsClient() {
         <div style={{ marginBottom: 16 }}>
           <h2 style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', margin: 0 }}>Notifications</h2>
           <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-            Configure which events trigger alerts.
+            Preview only — preferences are saved in this browser and no notifications are sent yet.
           </p>
         </div>
 
@@ -275,7 +221,7 @@ export function SettingsClient() {
               style={INPUT_STYLE}
             />
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
-              Requires SMTP configuration in backend settings.
+              Email delivery is not implemented in this demo.
             </div>
           </div>
         )}
@@ -310,12 +256,13 @@ export function SettingsClient() {
 
   function renderSimulation() {
     const INFO_ROWS = [
-      ['UPS Capacity',     '800 kVA'],
-      ['Generator Capacity', '1000 kW'],
-      ['CRAH Units',       '4'],
-      ['Target PUE',       '1.45'],
-      ['Simulation Tick',  '5 s'],
-      ['IT Load Range',    '180–280 kW'],
+      ['UPS-01 rating',     '800 kVA / 720 kW'],
+      ['Racks',             '18 × 10 kW (Hall A 10 · Hall B 8)'],
+      ['CRAH units',        '4'],
+      ['Typical IT load',   '≈ 110 kW'],
+      ['Typical PUE',       '≈ 1.45 at 22 °C setpoint'],
+      ['Simulation tick',   '5 s'],
+      ['Injected faults',   '60 s, max 120 s'],
     ];
     return (
       <div>
@@ -351,9 +298,9 @@ export function SettingsClient() {
         }}>
           Simulation parameters are configured in{' '}
           <code style={{ fontSize: 12, color: 'var(--text)', background: 'rgba(255,255,255,0.04)', padding: '1px 5px', borderRadius: 2 }}>
-            simulation/electrical/config.py
+            simulation/electrical/facility_sim.py
           </code>
-          . Edit that file to change hardware parameters.
+          (constants at the top of the file).
         </div>
       </div>
     );
@@ -449,10 +396,10 @@ export function SettingsClient() {
         <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 3 }}>Platform configuration — ADMIN only</p>
       </div>
 
-      {/* Two-column layout */}
-      <div style={{ display: 'flex', gap: 0, minHeight: 500 }}>
+      {/* Two-column layout (sidebar becomes a scrolling tab row on phones) */}
+      <div className="side-layout">
         {/* Sidebar */}
-        <div style={{ width: 200, borderRight: '1px solid var(--border)', flexShrink: 0 }}>
+        <div className="side-layout-nav">
           {SECTIONS.map(s => (
             <button
               key={s.id}
@@ -472,7 +419,7 @@ export function SettingsClient() {
         </div>
 
         {/* Content */}
-        <div style={{ flex: 1, padding: '0 0 0 28px' }}>
+        <div className="side-layout-body">
           {renderSection()}
         </div>
       </div>

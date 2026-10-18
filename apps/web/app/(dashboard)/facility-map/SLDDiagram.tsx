@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
-import type { WsFacilitySnapshot, WsUpsState } from '@dctwin/types';
+import type { WsFacilitySnapshot, WsHallStatus, WsUpsState } from '@dctwin/types';
 
 // ── Status types & colors ─────────────────────────────────────────────────────
 
@@ -30,6 +30,7 @@ function genStatus(state: string | undefined): SldNodeStatus {
   if (!state || state === 'STANDBY') return 'standby';
   if (state === 'STARTING') return 'starting';
   if (state === 'TRANSFERRED') return 'ok';
+  if (state === 'FAULT') return 'critical';
   return 'warning'; // RECOVERY
 }
 
@@ -39,10 +40,12 @@ function pduStatus(loadPct: number): SldNodeStatus {
   return 'ok';
 }
 
-function hallStatus(racksAbove30: boolean, racksAbove27: boolean, hasCritAlarm: boolean): SldNodeStatus {
-  if (hasCritAlarm || racksAbove30) return 'critical';
-  if (racksAbove27) return 'warning';
-  return 'ok';
+// Hall status is computed by the backend from the shared threshold table.
+function hallStatus(status: WsHallStatus | undefined): SldNodeStatus {
+  if (status === 'CRITICAL') return 'critical';
+  if (status === 'WARNING') return 'warning';
+  if (status === 'OK') return 'ok';
+  return 'standby';
 }
 
 // ── Fault glow ────────────────────────────────────────────────────────────────
@@ -195,16 +198,8 @@ export function SLDDiagram({
   const hallBKw = snapshot?.halls?.find(h => h.id === 'data-hall-b')?.total_kw
     ?? racksB.reduce((s, r) => s + r.kw, 0);
 
-  const hallASt = hallStatus(
-    racksA.some(r => r.inlet_c >= 30),
-    racksA.some(r => r.inlet_c >= 27),
-    racksA.some(r => r.status === 'CRITICAL'),
-  );
-  const hallBSt = hallStatus(
-    racksB.some(r => r.inlet_c >= 30),
-    racksB.some(r => r.inlet_c >= 27),
-    racksB.some(r => r.status === 'CRITICAL'),
-  );
+  const hallASt = hallStatus(snapshot?.halls?.find(h => h.id === 'data-hall-a')?.status);
+  const hallBSt = hallStatus(snapshot?.halls?.find(h => h.id === 'data-hall-b')?.status);
 
   // ── Layout constants ──
   const VIEW_W = 800;

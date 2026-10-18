@@ -57,7 +57,7 @@ export function SnmpPanel() {
 
   return (
     <div
-      className="w-64 shrink-0 rounded border border-[var(--border)] bg-[var(--surface)]"
+      className="w-full rounded border border-[var(--border)] bg-[var(--surface)]"
       style={{ alignSelf: 'flex-start' }}
     >
       {/* Header — always visible */}

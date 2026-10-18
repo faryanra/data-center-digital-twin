@@ -2,10 +2,52 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { AlarmRow } from '@dctwin/types';
+import { useAuth } from '@/lib/auth/context';
 
 const API = '/api/proxy';
 
 type TabId = 'active' | 'acknowledged' | 'cleared';
+
+// Live alarms come from the alarm manager; cleared ones only exist in history.
+interface DisplayAlarm extends Omit<AlarmRow, 'state'> {
+  state: AlarmRow['state'] | 'CLEARED';
+  cleared_at: number | null;
+}
+
+interface HistoryRow {
+  alarm_id: string;
+  severity: AlarmRow['severity'];
+  status: string;
+  equipment_id: string;
+  message: string;
+  triggered_at: string | null;
+  acknowledged_at: string | null;
+  cleared_at: string | null;
+}
+
+const isoToEpoch = (iso: string | null): number | null => (iso ? Date.parse(iso) / 1000 : null);
+
+function fromHistory(h: HistoryRow): DisplayAlarm {
+  return {
+    id: h.alarm_id,
+    severity: h.severity,
+    source: h.equipment_id,
+    message: h.message,
+    state: 'CLEARED',
+    raised_at: isoToEpoch(h.triggered_at) ?? 0,
+    acked_by: null,
+    acked_at: isoToEpoch(h.acknowledged_at),
+    cleared_at: isoToEpoch(h.cleared_at),
+  };
+}
+
+async function errorDetail(res: Response): Promise<string> {
+  try {
+    const body = await res.json() as { detail?: unknown };
+    if (typeof body.detail === 'string') return body.detail;
+  } catch { /* non-JSON body */ }
+  return `HTTP ${res.status}`;
+}
 
 function timeAgo(tsMs: number): string {
   const s = Math.floor((Date.now() - tsMs) / 1000);
@@ -24,20 +66,28 @@ function sevColor(severity: string): string {
 }
 
 export default function AlarmsPage() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'ADMIN';
   const [tab, setTab]           = useState<TabId>('active');
-  const [alarms, setAlarms]     = useState<AlarmRow[]>([]);
+  const [alarms, setAlarms]     = useState<DisplayAlarm[]>([]);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [lastFetchMs, setLastFetchMs] = useState<number | null>(null);
   const [activeCount, setActiveCount] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function fetchAlarms(currentTab: TabId) {
     try {
-      const res = await fetch(`${API}/alarms?state=${currentTab}`);
+      const url = currentTab === 'cleared'
+        ? `${API}/alarms/history?status=CLEARED&limit=100`
+        : `${API}/alarms?state=${currentTab}`;
+      const res = await fetch(url);
       if (!res.ok) { setError(true); return; }
       const data = await res.json() as unknown;
-      const rows = Array.isArray(data) ? (data as AlarmRow[]) : ((data as { alarms?: AlarmRow[] }).alarms ?? []);
+      const rows: DisplayAlarm[] = currentTab === 'cleared'
+        ? (data as HistoryRow[]).map(fromHistory)
+        : (data as AlarmRow[]).map(a => ({ ...a, cleared_at: null }));
       setAlarms(rows);
       setError(false);
       setLastFetchMs(Date.now());
@@ -73,15 +123,24 @@ export default function AlarmsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
-  async function ackAlarm(id: string) {
-    await fetch(`${API}/alarms/${id}/acknowledge`, { method: 'POST' });
-    void fetchAlarms(tab);
-  }
-
-  async function clearAlarm(id: string) {
-    await fetch(`${API}/alarms/${id}`, { method: 'DELETE' });
+  async function runAction(label: string, request: () => Promise<Response>) {
+    setActionError(null);
+    try {
+      const res = await request();
+      if (!res.ok) setActionError(`${label} failed: ${await errorDetail(res)}`);
+    } catch {
+      setActionError(`${label} failed: backend unreachable`);
+    }
     void fetchAlarms(tab);
     void fetchActiveCount();
+  }
+
+  function ackAlarm(id: string) {
+    void runAction('Acknowledge', () => fetch(`${API}/alarms/${id}/acknowledge`, { method: 'POST' }));
+  }
+
+  function clearAlarm(id: string) {
+    void runAction('Clear', () => fetch(`${API}/alarms/${id}`, { method: 'DELETE' }));
   }
 
   const critCount = alarms.filter(a => a.severity === 'CRITICAL').length;
@@ -93,7 +152,7 @@ export default function AlarmsPage() {
   return (
     <div className="page-content">
       {/* ── Header ── */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', margin: 0 }}>Alarms</h1>
           <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
@@ -111,7 +170,7 @@ export default function AlarmsPage() {
       <div style={{
         display: 'flex', gap: 4, padding: 4,
         background: 'var(--surface)', border: '1px solid var(--border)',
-        borderRadius: 4, width: 'fit-content',
+        borderRadius: 4, width: 'fit-content', maxWidth: '100%', overflowX: 'auto',
       }}>
         {(['active', 'acknowledged', 'cleared'] as const).map(t => (
           <button
@@ -139,8 +198,17 @@ export default function AlarmsPage() {
       </div>
 
       {/* ── Summary strip (active tab only) ── */}
+      {actionError && (
+        <div role="alert" style={{
+          padding: '10px 14px', borderRadius: 4, fontSize: 13, color: '#DC2626',
+          background: 'rgba(220,38,38,0.06)', border: '1px solid rgba(220,38,38,0.3)',
+        }}>
+          {actionError}
+        </div>
+      )}
+
       {tab === 'active' && alarms.length > 0 && (
-        <div style={{ display: 'flex', gap: 12 }}>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <div style={{
             padding: '8px 14px', borderRadius: 4,
             background: 'rgba(220,38,38,0.08)', border: '1px solid rgba(220,38,38,0.3)',
@@ -211,8 +279,8 @@ export default function AlarmsPage() {
                   marginBottom: 8,
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ flex: '1 1 220px', minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                       <span style={{
                         fontSize: 13, fontWeight: 700, color,
@@ -230,9 +298,11 @@ export default function AlarmsPage() {
                     <div style={{ fontSize: 14, color: 'var(--muted)' }}>
                       Started {timeAgo(alarm.raised_at * 1000)}
                       {alarm.acked_at !== null && ` · Acknowledged ${timeAgo(alarm.acked_at * 1000)}`}
+                      {alarm.acked_by && ` by ${alarm.acked_by}`}
+                      {alarm.cleared_at !== null && ` · Cleared ${timeAgo(alarm.cleared_at * 1000)}`}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: 6, marginLeft: 16, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                     {alarm.state === 'ACTIVE' && (
                       <button
                         onClick={() => void ackAlarm(alarm.id)}
@@ -245,16 +315,18 @@ export default function AlarmsPage() {
                         Acknowledge
                       </button>
                     )}
-                    <button
-                      onClick={() => void clearAlarm(alarm.id)}
-                      style={{
-                        padding: '6px 12px', fontSize: 13, fontWeight: 500, borderRadius: 2,
-                        border: '1px solid #DC2626', background: 'rgba(220,38,38,0.06)',
-                        color: '#DC2626', cursor: 'pointer',
-                      }}
-                    >
-                      Clear
-                    </button>
+                    {isAdmin && alarm.state !== 'CLEARED' && (
+                      <button
+                        onClick={() => void clearAlarm(alarm.id)}
+                        style={{
+                          padding: '6px 12px', fontSize: 13, fontWeight: 500, borderRadius: 2,
+                          border: '1px solid #DC2626', background: 'rgba(220,38,38,0.06)',
+                          color: '#DC2626', cursor: 'pointer',
+                        }}
+                      >
+                        Clear
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

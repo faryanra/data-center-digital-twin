@@ -122,7 +122,8 @@ body { min-height: 100vh; background: var(--bg); font-size: 14px; }
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
-  overflow: hidden;
+  /* Still clips the rounded corners, but wide tables scroll instead of overflowing the page. */
+  overflow-x: auto;
 }
 
 .table-card table {
@@ -177,9 +178,44 @@ body { min-height: 100vh; background: var(--bg); font-size: 14px; }
   gap: 20px;
 }
 
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr;         gap: 16px; }
-.grid-3 { display: grid; grid-template-columns: repeat(3,1fr);   gap: 16px; }
-.grid-4 { display: grid; grid-template-columns: repeat(4,1fr);   gap: 16px; }
+/* minmax(0,1fr) lets columns shrink below their content's min width instead of
+   pushing the page wider than the viewport. */
+.grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 16px; }
+
+/* ── Responsive page layouts (stack under 768 px) ── */
+.dash-grid { display: grid; grid-template-columns: minmax(0,1fr) 340px; gap: 16px; align-items: start; }
+.split-panel { display: flex; gap: 24px; align-items: flex-start; }
+.split-panel-side { width: 300px; flex-shrink: 0; }
+.side-layout { display: flex; min-height: 500px; }
+.side-layout-nav { width: 200px; border-right: 1px solid var(--border); flex-shrink: 0; }
+.side-layout-body { flex: 1; min-width: 0; padding: 0 0 0 28px; }
+.tab-scroll { overflow-x: auto; scrollbar-width: none; }
+.tab-scroll > * { flex-shrink: 0; }
+
+@media (max-width: 1024px) {
+  .dash-grid { grid-template-columns: minmax(0,1fr); }
+  .grid-4 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+
+@media (max-width: 768px) {
+  .grid-2, .grid-3 { grid-template-columns: minmax(0,1fr); }
+  .split-panel { flex-direction: column; align-items: stretch; }
+  .split-panel-side { width: 100%; }
+  .side-layout { flex-direction: column; min-height: 0; }
+  .side-layout-nav {
+    width: 100%; display: flex; overflow-x: auto;
+    border-right: none; border-bottom: 1px solid var(--border);
+  }
+  .side-layout-nav > button { width: auto !important; flex: 0 0 auto; white-space: nowrap; }
+  .side-layout-body { padding: 16px 0 0; }
+  .page-content { padding: 0; }
+}
+
+@media (max-width: 480px) {
+  .grid-4 { grid-template-columns: minmax(0,1fr); }
+}
 .grid-auto { display: grid; grid-template-columns: repeat(auto-fill,minmax(280px,1fr)); gap: 16px; }
 
 /* ── Trend badge ── */
@@ -241,10 +277,8 @@ button, label, th, nav a { font-weight: 500; }
   .sld-flow { animation: none; }
 }
 
-/* Mobile / PWA */
+/* Mobile / PWA — the sidebar stays mounted: below lg it is an off-canvas drawer
+   opened by the topbar menu button. */
 @media (max-width: 768px) {
-  .sidebar-nav { display: none; }
-  .main-content { margin-left: 0 !important; padding: 1rem !important; }
-  .facility-map-flex { flex-direction: column !important; }
-  .fault-panel { width: 100% !important; }
+  .main-content { margin-left: 0 !important; }
 }

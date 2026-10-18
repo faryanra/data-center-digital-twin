@@ -23,9 +23,13 @@ export interface WsUpsState {
   input_ok: boolean;
 }
 
+export type WsHallStatus = 'OK' | 'WARNING' | 'CRITICAL';
+
 export interface WsHallState {
   id: string;
   name: string;
+  /** Computed by the backend from the shared threshold table (GET /thresholds). */
+  status: WsHallStatus;
   total_kw: number;
   capacity_kw: number;
   avg_inlet_c: number;
@@ -35,13 +39,26 @@ export interface WsHallState {
   rack_count: number;
 }
 
+export type WsFaultType = 'utility_loss' | 'crah_a_trip' | 'rack_overload' | 'generator_fail';
+
+export interface WsActiveFault {
+  fault: WsFaultType;
+  /** Epoch seconds; null when the fault lasts until cleared. */
+  expires_at: number | null;
+  remaining_s: number | null;
+}
+
+export type WsPowerSource = 'UTILITY' | 'GENERATOR' | 'BATTERY';
+
 export interface WsFacilitySnapshot {
   ts: number;
   pue: number;
   it_load_kw: number;
   total_power_kw: number;
   utility_ok: boolean;
-  generator_state: 'STANDBY' | 'STARTING' | 'TRANSFERRED' | 'RECOVERY';
+  generator_state: 'STANDBY' | 'STARTING' | 'TRANSFERRED' | 'RECOVERY' | 'FAULT';
+  power_source: WsPowerSource;
+  active_faults: WsActiveFault[];
   generator_fuel_pct: number;
   per_hall_cooling_kw: Record<string, number>;
   ups: WsUpsState[];

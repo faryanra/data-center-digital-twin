@@ -35,7 +35,7 @@ export default function FacilityMapPage() {
 
       {/* ── Flat header ── */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 24,
+        display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
         padding: '16px 0', borderBottom: '1px solid var(--border)',
         marginBottom: 0,
       }}>
@@ -48,7 +48,7 @@ export default function FacilityMapPage() {
           </p>
         </div>
 
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 20 }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
           {/* Utility status */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
             <span style={{
@@ -89,7 +89,7 @@ export default function FacilityMapPage() {
       </div>
 
       {/* ── Tab bar ── */}
-      <div style={{
+      <div className="tab-scroll" style={{
         display: 'flex', borderBottom: '1px solid var(--border)',
         marginBottom: 24,
       }}>
@@ -115,11 +115,11 @@ export default function FacilityMapPage() {
 
       {/* ── Tab content ── */}
       {activeTab === 'electrical' && (
-        <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
+        <div className="split-panel">
           <div style={{ flex: 1, minWidth: 0 }}>
-            <SLDDiagram snapshot={snapshot} activeFault={null} />
+            <SLDDiagram snapshot={snapshot} activeFault={snapshot?.active_faults?.[0]?.fault ?? null} />
           </div>
-          <div style={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="split-panel-side" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <ModbusPanel />
             <SnmpPanel />
           </div>

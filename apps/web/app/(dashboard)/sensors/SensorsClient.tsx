@@ -484,7 +484,7 @@ export function SensorsClient() {
             />
 
             {/* Thresholds */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+            <div className="grid-2" style={{ gap: 12, marginBottom: 20 }}>
               <div>
                 <label style={LABEL_STYLE}>Warn Threshold</label>
                 <input

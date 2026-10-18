@@ -1,122 +1,152 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useFacilitySocket } from '@/hooks/useFacilitySocket';
 import { useAuth } from '@/lib/auth/context';
+import type { WsFaultType } from '@dctwin/types';
 
 const API_BASE = '/api/proxy';
+const FAULT_DURATION_S = 60;
 
 interface EventEntry {
   time: string;
   type: string;
   msg: string;
+  error?: boolean;
 }
 
-const FAULTS = [
+const FAULTS: {
+  id: WsFaultType;
+  label: string;
+  description: string;
+  impact: string;
+  severity: 'CRITICAL' | 'WARNING';
+  icon: string;
+}[] = [
   {
     id: 'utility_loss',
     label: 'Utility Power Loss',
     description: 'Simulates grid outage. UPS switches to battery, generator starts.',
     impact: 'UPS: BATTERY → GEN-01: STARTING → TRANSFERRED',
-    severity: 'CRITICAL' as const,
+    severity: 'CRITICAL',
     icon: '⚡',
   },
   {
     id: 'crah_a_trip',
     label: 'CRAH-A Unit Trip',
     description: 'Simulates cooling unit failure. Temperature rises in Hall A.',
-    impact: 'CRAH-01: OFFLINE → Hall A temp rising → WARNING alarms',
-    severity: 'WARNING' as const,
+    impact: 'CRAH 2/4 online → Hall A inlet rising → WARNING alarms',
+    severity: 'WARNING',
     icon: '❄',
   },
   {
     id: 'rack_overload',
     label: 'Rack IT Overload',
-    description: 'Simulates excessive IT load. PDU approaches trip threshold.',
-    impact: 'PDU-A load > 90% → CRITICAL alarm → potential breaker trip',
-    severity: 'WARNING' as const,
+    description: 'Racks A06–A10 draw 130 % of their rated power.',
+    impact: 'Racks over rating → PDU-A load > 75 % → Hall A inlet rising',
+    severity: 'WARNING',
     icon: '🖥',
   },
   {
     id: 'generator_fail',
     label: 'Generator Start Failure',
-    description: 'Simulates generator failure to start during utility loss.',
-    impact: 'GEN-01: FAULT → UPS on battery only → CRITICAL alarm',
-    severity: 'CRITICAL' as const,
+    description: 'Mains outage in which the generator fails to start.',
+    impact: 'Utility lost → GEN-01: FAULT → UPS on battery only → CRITICAL',
+    severity: 'CRITICAL',
     icon: '⚙',
   },
-] as const;
+];
+
+const FAULT_LABEL = Object.fromEntries(FAULTS.map(f => [f.id, f.label])) as Record<WsFaultType, string>;
+
+async function errorDetail(res: Response): Promise<string> {
+  try {
+    const body = await res.json() as { detail?: unknown };
+    if (typeof body.detail === 'string') return body.detail;
+  } catch { /* non-JSON body */ }
+  return `HTTP ${res.status}`;
+}
 
 export default function SimulationPage() {
   const { snapshot } = useFacilitySocket();
   const { user } = useAuth();
   const isAdmin = user?.role === 'ADMIN';
 
-  const [activeFault, setActiveFault] = useState<string | null>(null);
-  const [faultStatus, setFaultStatus] = useState<'idle' | 'active' | 'recovering'>('idle');
   const [eventLog, setEventLog] = useState<EventEntry[]>([]);
-  const [prevUpsMode, setPrevUpsMode] = useState<string | undefined>(undefined);
-  const [prevGenState, setPrevGenState] = useState<string | undefined>(undefined);
   const [pending, setPending] = useState<string | null>(null);
+  const prevUpsMode = useRef<string | undefined>(undefined);
+  const prevGenState = useRef<string | undefined>(undefined);
+  const prevFaults = useRef<Set<string> | null>(null);
 
-  function addLog(type: string, msg: string) {
+  // The server is the source of truth: faults survive navigation and are
+  // shared by every viewer, so derive all fault UI from the snapshot.
+  const activeFaults = snapshot?.active_faults ?? [];
+  const activeIds = new Set<string>(activeFaults.map(f => f.fault));
+  const remaining = activeFaults.reduce<number | null>(
+    (max, f) => (f.remaining_s === null ? max : Math.max(max ?? 0, f.remaining_s)), null,
+  );
+
+  function addLog(type: string, msg: string, error = false) {
     const time = new Date().toLocaleTimeString('en-GB');
-    setEventLog(prev => [{ time, type, msg }, ...prev].slice(0, 50));
+    setEventLog(prev => [{ time, type, msg, error }, ...prev].slice(0, 50));
   }
 
   useEffect(() => {
-    if (!activeFault || !snapshot) return;
+    if (!snapshot) return;
     const upsMode = snapshot.ups?.[0]?.mode;
     const genState = snapshot.generator_state;
-    if (upsMode !== prevUpsMode) {
+    if (prevUpsMode.current !== undefined && upsMode !== prevUpsMode.current) {
       if (upsMode === 'BATTERY') addLog('UPS', 'Switched to battery power');
       if (upsMode === 'BYPASS')  addLog('UPS', 'Switched to bypass mode');
-      if (upsMode === 'NORMAL')  addLog('UPS', 'Returned to normal operation');
-      setPrevUpsMode(upsMode);
+      if (upsMode === 'NORMAL')  addLog('UPS', 'Back to normal (on-line) operation');
     }
-    if (genState !== prevGenState) {
+    if (prevGenState.current !== undefined && genState !== prevGenState.current) {
       if (genState === 'STARTING')    addLog('GEN', 'Generator starting…');
       if (genState === 'TRANSFERRED') addLog('GEN', 'Generator online — load transferred');
-      if (genState === 'RECOVERY')    addLog('GEN', 'Generator in recovery mode');
-      setPrevGenState(genState);
+      if (genState === 'RECOVERY')    addLog('GEN', 'Mains restored — generator cooling down');
+      if (genState === 'FAULT')       addLog('GEN', 'Generator failed to start', true);
     }
-  }, [snapshot?.ups?.[0]?.mode, snapshot?.generator_state, activeFault]);
+    prevUpsMode.current = upsMode;
+    prevGenState.current = genState;
 
-  async function injectFault(faultId: string) {
-    if (activeFault || pending) return;
+    const now = new Set<string>(snapshot.active_faults?.map(f => f.fault) ?? []);
+    if (prevFaults.current) {
+      for (const id of prevFaults.current) {
+        if (!now.has(id)) addLog(id, '✓ Fault ended — system recovering');
+      }
+    }
+    prevFaults.current = now;
+  }, [snapshot]);
+
+  async function injectFault(faultId: WsFaultType) {
+    if (activeFaults.length > 0 || pending) return;
     setPending(faultId);
     try {
-      await fetch(`${API_BASE}/simulation/fault`, {
+      const res = await fetch(`${API_BASE}/simulation/fault`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fault_type: faultId, duration_s: 60 }),
+        body: JSON.stringify({ fault_type: faultId, duration_s: FAULT_DURATION_S }),
       });
-    } catch { /* offline — still show feedback */ }
-
-    setActiveFault(faultId);
-    setFaultStatus('active');
-    addLog(faultId, '✓ Fault injected — monitoring system response');
-    setPending(null);
-
-    setTimeout(() => {
-      setFaultStatus('recovering');
-      addLog(faultId, '↻ Recovery sequence initiated');
-    }, 60000);
-    setTimeout(() => {
-      setActiveFault(null);
-      setFaultStatus('idle');
-      addLog(faultId, '✓ System returned to NORMAL');
-    }, 75000);
+      if (res.ok) {
+        addLog(faultId, `✓ Fault injected for ${FAULT_DURATION_S} s — monitoring system response`);
+      } else {
+        addLog(faultId, `✕ Injection failed: ${await errorDetail(res)}`, true);
+      }
+    } catch {
+      addLog(faultId, '✕ Injection failed: backend unreachable', true);
+    } finally {
+      setPending(null);
+    }
   }
 
-  async function clearFault() {
-    await fetch(`${API_BASE}/simulation/fault`, { method: 'DELETE' });
-    setFaultStatus('recovering');
-    addLog(activeFault ?? 'fault', 'Fault manually cleared — system recovering');
-    setTimeout(() => {
-      setActiveFault(null);
-      setFaultStatus('idle');
-    }, 5000);
+  async function clearFaults() {
+    try {
+      const res = await fetch(`${API_BASE}/simulation/fault`, { method: 'DELETE' });
+      if (res.ok) addLog('fault', 'Faults cleared manually — system recovering');
+      else addLog('fault', `✕ Clear failed: ${await errorDetail(res)}`, true);
+    } catch {
+      addLog('fault', '✕ Clear failed: backend unreachable', true);
+    }
   }
 
   if (!isAdmin) {
@@ -135,41 +165,45 @@ export default function SimulationPage() {
     );
   }
 
+  const bannerCritical = activeFaults.some(f => FAULTS.find(x => x.id === f.fault)?.severity === 'CRITICAL');
+
   return (
     <div>
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ fontSize: 18, fontWeight: 600, color: 'var(--text)', margin: 0 }}>Fault Injection Simulator</h1>
         <p style={{ fontSize: 14, color: 'var(--muted)', marginTop: 4 }}>
-          Inject faults to test system response and validate recovery procedures.
-          All faults auto-recover after 60 seconds.
+          Faults run on the shared simulator, so every connected viewer sees them.
+          Each fault ends automatically after {FAULT_DURATION_S} seconds.
         </p>
       </div>
 
-      {/* Status bar */}
-      {faultStatus !== 'idle' && (
+      {/* Active-fault banner — rendered from the server snapshot */}
+      {activeFaults.length > 0 && (
         <div style={{
           padding: '12px 16px', borderRadius: 8, marginBottom: 20,
-          background: faultStatus === 'active' ? 'rgba(220,38,38,0.06)' : 'rgba(217,119,6,0.06)',
-          border: `1px solid ${faultStatus === 'active' ? 'rgba(220,38,38,0.3)' : 'rgba(217,119,6,0.3)'}`,
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          background: bannerCritical ? 'rgba(220,38,38,0.06)' : 'rgba(217,119,6,0.06)',
+          border: `1px solid ${bannerCritical ? 'rgba(220,38,38,0.3)' : 'rgba(217,119,6,0.3)'}`,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{
               width: 8, height: 8, borderRadius: '50%',
-              background: faultStatus === 'active' ? '#DC2626' : '#D97706',
+              background: bannerCritical ? '#DC2626' : '#D97706',
               animation: 'skeleton-pulse 1s ease-in-out infinite',
               display: 'inline-block', flexShrink: 0,
             }} />
-            <span style={{
-              fontSize: 14, fontWeight: 600,
-              color: faultStatus === 'active' ? '#DC2626' : '#D97706',
-            }}>
-              {faultStatus === 'active' ? `FAULT ACTIVE: ${activeFault}` : 'RECOVERING…'}
+            <span style={{ fontSize: 14, fontWeight: 600, color: bannerCritical ? '#DC2626' : '#D97706' }}>
+              FAULT ACTIVE: {activeFaults.map(f => FAULT_LABEL[f.fault] ?? f.fault).join(' + ')}
+              {remaining !== null && (
+                <span style={{ fontWeight: 500, color: 'var(--muted)', marginLeft: 8 }}>
+                  ends in ~{remaining} s
+                </span>
+              )}
             </span>
           </div>
           <button
-            onClick={clearFault}
+            onClick={() => void clearFaults()}
             style={{
               padding: '6px 12px', borderRadius: 6, border: '1px solid var(--border)',
               fontSize: 13, cursor: 'pointer', background: 'var(--surface)', color: 'var(--text)',
@@ -181,24 +215,29 @@ export default function SimulationPage() {
       )}
 
       {/* Fault cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 28 }}>
+      <div className="grid-2" style={{ marginBottom: 28 }}>
         {FAULTS.map(fault => {
-          const isActive  = activeFault === fault.id;
+          const isActive  = activeIds.has(fault.id);
           const isPending = pending === fault.id;
-          const isLocked  = (!!activeFault || !!pending) && !isActive && !isPending;
+          const isLocked  = (activeFaults.length > 0 || !!pending) && !isActive && !isPending;
           const borderColor = isActive
             ? (fault.severity === 'CRITICAL' ? '#DC2626' : '#D97706')
             : isPending ? '#2563EB'
             : 'var(--border)';
           return (
-            <div
+            <button
               key={fault.id}
+              type="button"
               onClick={() => void injectFault(fault.id)}
+              disabled={isLocked || isActive || isPending}
               style={{
                 position: 'relative',
                 padding: '20px',
                 borderRadius: 12,
-                cursor: isLocked ? 'not-allowed' : isPending ? 'wait' : 'pointer',
+                textAlign: 'left',
+                font: 'inherit',
+                color: 'inherit',
+                cursor: isLocked ? 'not-allowed' : isPending ? 'wait' : isActive ? 'default' : 'pointer',
                 border: `${isActive || isPending ? '2px' : '1px'} solid ${borderColor}`,
                 background: isActive
                   ? (fault.severity === 'CRITICAL' ? 'rgba(220,38,38,0.05)' : 'rgba(217,119,6,0.05)')
@@ -246,11 +285,11 @@ export default function SimulationPage() {
               <div style={{
                 fontSize: 12, color: 'var(--muted)', fontFamily: 'monospace',
                 padding: '6px 10px', background: 'var(--bg)', borderRadius: 4,
-                border: '1px solid var(--border)',
+                border: '1px solid var(--border)', overflowWrap: 'anywhere',
               }}>
                 {fault.impact}
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -273,7 +312,7 @@ export default function SimulationPage() {
               <div
                 key={i}
                 style={{
-                  display: 'flex', gap: 16, padding: '10px 16px',
+                  display: 'flex', gap: 16, padding: '10px 16px', flexWrap: 'wrap',
                   borderBottom: i < eventLog.length - 1 ? '1px solid var(--border)' : 'none',
                 }}
               >
@@ -283,7 +322,7 @@ export default function SimulationPage() {
                 <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent)', flexShrink: 0 }}>
                   {e.type}
                 </span>
-                <span style={{ fontSize: 13, color: 'var(--text)' }}>{e.msg}</span>
+                <span style={{ fontSize: 13, color: e.error ? '#DC2626' : 'var(--text)' }}>{e.msg}</span>
               </div>
             ))
           )}

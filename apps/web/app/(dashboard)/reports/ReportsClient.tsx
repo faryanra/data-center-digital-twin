@@ -168,7 +168,7 @@ export function ReportsClient() {
       </div>
 
       {/* ── Section 1: Report type selector ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12, marginBottom: 20 }}>
+      <div className="grid-3" style={{ gap: 12, marginBottom: 20 }}>
         {REPORT_TYPES.map(r => (
           <div
             key={r.id}

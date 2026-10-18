@@ -6,6 +6,10 @@ interface Props {
   snapshot: WsFacilitySnapshot | null;
 }
 
+// Same values as the backend threshold table (GET /thresholds → rack_inlet_c).
+const RACK_INLET_WARN_C = 27;
+const RACK_INLET_CRIT_C = 35;
+
 interface HallRow {
   id: string;
   name: string;
@@ -50,12 +54,10 @@ export function HallStatusBar({ snapshot }: Props) {
     const crahTotal  = hallState?.crah_total   ?? Math.ceil(snapshot!.cooling.crah_total / 2);
     const rackCount  = hallState?.rack_count   ?? racks.length;
 
-    let status: HallRow['status'] = 'OK';
-    if (peakInletC >= 30 || racks.some(r => r.status === 'CRITICAL') || crahActive === 0) {
-      status = 'CRITICAL';
-    } else if (avgInletC >= 27 || racks.some(r => r.status === 'WARNING') || crahActive < crahTotal) {
-      status = 'WARNING';
-    }
+    // Status comes from the backend's threshold table so every page agrees.
+    const status: HallRow['status'] = hallState?.status
+      ?? (racks.some(r => r.status === 'CRITICAL') ? 'CRITICAL'
+        : racks.some(r => r.status === 'WARNING') ? 'WARNING' : 'OK');
 
     return { id, name, itLoadKw, avgInletC, peakInletC, crahActive, crahTotal, rackCount, status };
   }
@@ -109,13 +111,14 @@ export function HallStatusBar({ snapshot }: Props) {
               </td>
               <td style={{
                 padding: '10px 12px', fontVariantNumeric: 'tabular-nums',
-                color: hall.avgInletC > 27 ? '#D97706' : 'var(--text)',
+                color: hall.avgInletC >= RACK_INLET_WARN_C ? '#D97706' : 'var(--text)',
               }}>
                 {hall.avgInletC.toFixed(1)} °C
               </td>
               <td style={{
                 padding: '10px 12px', fontVariantNumeric: 'tabular-nums',
-                color: hall.peakInletC > 30 ? '#DC2626' : 'var(--text)',
+                color: hall.peakInletC >= RACK_INLET_CRIT_C ? '#DC2626'
+                  : hall.peakInletC >= RACK_INLET_WARN_C ? '#D97706' : 'var(--text)',
               }}>
                 {hall.peakInletC.toFixed(1)} °C
               </td>

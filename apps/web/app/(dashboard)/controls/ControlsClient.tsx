@@ -102,7 +102,9 @@ export function ControlsClient() {
   const readOnly = !isAdmin;
 
   const [activeSection, setActiveSection] = useState<SectionId>('cooling');
-  const [setpoint, setSetpoint] = useState(snapshot?.crah_setpoint_c ?? 21);
+  // null = follow the live setpoint; a number = the operator is editing.
+  const [setpointDraft, setSetpointDraft] = useState<number | null>(null);
+  const setpoint = setpointDraft ?? snapshot?.crah_setpoint_c ?? 22;
   const [emergencyArmed, setEmergencyArmed] = useState(false);
 
   const ups0 = snapshot?.ups[0];
@@ -129,7 +131,7 @@ export function ControlsClient() {
                   type="number"
                   min={15} max={30} step={0.5}
                   value={setpoint}
-                  onChange={e => setSetpoint(+e.target.value)}
+                  onChange={e => setSetpointDraft(+e.target.value)}
                   disabled={readOnly}
                   style={{
                     width: 80, padding: '8px 10px', fontSize: 16, fontWeight: 600,
@@ -142,7 +144,11 @@ export function ControlsClient() {
                   <ActionButton
                     label="Apply"
                     disabled={readOnly}
-                    onRun={() => postControl('crah/setpoint', { setpoint_c: setpoint, zone: 'all' })}
+                    onRun={async () => {
+                      const ok = await postControl('crah/setpoint', { setpoint_c: setpoint, zone: 'all' });
+                      if (ok) setSetpointDraft(null);
+                      return ok;
+                    }}
                   />
                 </div>
               </div>
@@ -157,9 +163,10 @@ export function ControlsClient() {
             <div>
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Cooling Mode</div>
               <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
-                Operating mode for the cooling plant
+                Sets the CRAH setpoint: NORMAL 22 °C · ECONOMY 24 °C (less cooling energy,
+                warmer racks) · EMERGENCY 18 °C (maximum cooling, higher PUE)
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {COOLING_MODES.map(mode => (
                   <div key={mode} style={{ flex: '0 0 auto', minWidth: 120 }}>
                     <ActionButton
@@ -402,9 +409,9 @@ export function ControlsClient() {
         )}
       </div>
 
-      {/* Sidebar + content */}
-      <div style={{ display: 'flex', gap: 0, minHeight: 500 }}>
-        <div style={{ width: 200, borderRight: '1px solid var(--border)', flexShrink: 0 }}>
+      {/* Sidebar + content (sidebar becomes a scrolling tab row on phones) */}
+      <div className="side-layout">
+        <div className="side-layout-nav">
           {SECTIONS.map(s => (
             <button
               key={s.id}
@@ -423,7 +430,7 @@ export function ControlsClient() {
           ))}
         </div>
 
-        <div style={{ flex: 1, padding: '0 0 0 28px' }}>
+        <div className="side-layout-body">
           {renderSection()}
         </div>
       </div>

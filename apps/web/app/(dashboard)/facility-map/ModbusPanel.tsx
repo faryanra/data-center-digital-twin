@@ -42,7 +42,7 @@ export function ModbusPanel() {
   useEffect(() => { fetch_(); }, [fetch_]);
 
   return (
-    <div className="w-72 shrink-0 rounded border border-[var(--border)] bg-[var(--surface)] p-4"
+    <div className="w-full rounded border border-[var(--border)] bg-[var(--surface)] p-4"
       style={{ alignSelf: 'flex-start' }}>
 
       {/* header */}
