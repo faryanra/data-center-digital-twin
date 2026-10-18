@@ -16,9 +16,9 @@ A real-time simulation and monitoring platform for a Tier-III data centre, built
 
 Every 5 seconds a physics-based simulation engine (`FacilitySimulator`) computes a `FacilitySnapshot` — power usage, cooling efficiency, PUE, generator state, per-hall temperatures, and active alarms — and broadcasts it over WebSocket to all connected dashboards simultaneously.
 
-The same snapshot updates Modbus TCP holding registers on port 5020, so any standard SCADA tool can read live values without custom integration.
+The same snapshot updates Modbus TCP holding registers on port 5020 (local/Docker), so any standard SCADA tool can read live values without custom integration.
 
-**Facility model:** two data halls (Hall A: 10 racks, Hall B: 8 racks), UPS bank, PDU, two CRAH units, diesel generator with ATS.
+**Facility model:** two data halls (Hall A: 10 racks, Hall B: 8 racks, 10 kW each), one 800 kVA UPS, two PDUs, four CRAH units, and a diesel generator with ATS.
 
 ## Architecture
 
@@ -31,9 +31,9 @@ flowchart TD
     Proxy --> FastAPI["FastAPI :8000"]
 
     FastAPI --> WS["WebSocket /ws/facility\n5-second tick"]
-    FastAPI --> Modbus["Modbus TCP :5020\n4 slaves · 6 registers each"]
-    FastAPI --> PG["PostgreSQL\nalarms · sensors · users"]
-    FastAPI --> Influx["InfluxDB\ntime-series (optional)"]
+    FastAPI --> Modbus["Modbus TCP :5020\n4 slaves (local/Docker)"]
+    FastAPI --> PG["PostgreSQL / SQLite\nalarm history"]
+    FastAPI --> Prom["/metrics\nPrometheus + Grafana"]
 
     subgraph Simulator
         WS --> Sim["FacilitySimulator\ntick() every 5 s"]
@@ -50,19 +50,18 @@ stateDiagram-v2
     [*] --> NORMAL : startup
 
     state UPS {
-        NORMAL --> BATTERY : mains loss
-        BATTERY --> NORMAL : mains restored
-        BATTERY --> BYPASS  : maintenance
-        BYPASS  --> NORMAL  : bypass off
-        NORMAL  --> FAULT   : overload / fault
-        FAULT   --> NORMAL  : reset
+        NORMAL --> BATTERY : mains loss (generator not yet carrying load)
+        BATTERY --> NORMAL : generator transferred / mains restored
+        NORMAL --> BYPASS  : maintenance bypass on
+        BYPASS --> NORMAL  : bypass off
     }
 
     state Generator {
-        STANDBY --> STARTING    : ATS triggers (mains lost)
-        STARTING --> TRANSFERRED : engine ready
+        STANDBY --> STARTING    : ATS triggers (mains lost, auto-start armed)
+        STARTING --> TRANSFERRED : engine ready (5 s)
         TRANSFERRED --> RECOVERY : mains restored
         RECOVERY --> STANDBY    : cooldown complete
+        STANDBY --> FAULT       : start failure
     }
 ```
 
@@ -71,22 +70,25 @@ stateDiagram-v2
 ```mermaid
 sequenceDiagram
     participant Browser
-    participant Next as Next.js Server Action
-    participant JWT as jose (local)
+    participant Next as Next.js (server action + proxy)
     participant FastAPI
 
     Browser->>Next: POST /login {email, password}
-    Next->>FastAPI: POST /auth/token
-    FastAPI-->>Next: {access_token, role}
-    Next->>JWT: sign HS256 (8 h)
-    JWT-->>Next: signed token
+    Note over Next: check demo accounts (mock-auth.ts)<br/>sign JWT HS256 with JWT_SECRET (8 h)
     Next-->>Browser: Set-Cookie: auth_token (httpOnly)
 
     Browser->>Next: GET /dashboard
-    Next->>JWT: verify cookie locally
-    JWT-->>Next: {email, role} — no backend call
-    Next-->>Browser: 200 with X-User-Role forwarded to FastAPI
+    Note over Next: proxy.ts verifies the cookie locally
+    Next-->>Browser: page
+
+    Browser->>Next: POST /api/proxy/control/…
+    Next->>FastAPI: Authorization: Bearer <same JWT>
+    Note over FastAPI: verify signature with JWT_SECRET<br/>role from the token, never from headers
+    FastAPI-->>Next: 200 / 401 / 403
+    Next-->>Browser: response
 ```
+
+FastAPI and Next.js share `JWT_SECRET`; a request without a valid token gets 401, and one with the wrong role gets 403.
 
 ## Stack
 
@@ -95,25 +97,25 @@ sequenceDiagram
 | Frontend | Next.js 16 (App Router), TypeScript |
 | Charts | Recharts — real-time area/bar charts |
 | Backend | FastAPI, Python 3.13, async |
-| Auth | JWT (jose), `httpOnly` cookie, bcrypt (user creation) |
+| Auth | JWT HS256 — signed by Next.js (jose), verified by FastAPI (PyJWT); `httpOnly` cookie |
 | Simulation | Pure Python dataclass — replaceable interface |
-| Database | PostgreSQL 16, SQLAlchemy async |
-| Industrial | Modbus TCP :5020, pymodbus 3.7 — 4 slaves, 6 registers each |
-| Messaging | Mosquitto MQTT :1883 (optional telemetry publish) |
-| Observability | Prometheus + Grafana — pre-provisioned dashboards |
-| Infra | Docker Compose (local), Terraform EC2 (cloud) |
+| Database | PostgreSQL 16 (SQLite fallback), SQLAlchemy async — alarm history |
+| Industrial | Modbus TCP :5020, pymodbus 3.7 — 4 slaves (map below) |
+| Messaging | Mosquitto MQTT :1883 (optional snapshot publish) |
+| Observability | Prometheus + Grafana — facility dashboard on `dc_*` metrics |
+| Infra | Docker Compose; Render + Neon + Vercel; EC2 Terraform reference (untested) |
 | PWA | Web App Manifest — installable on desktop and mobile |
 
 ## Key Features
 
 - **Real-time telemetry**: WebSocket at 5-second tick, rolling 40-point buffer, Recharts visualization
-- **Physics simulation**: UPS state machine (NORMAL/BATTERY/BYPASS/FAULT), Generator ATS (STANDBY → STARTING → TRANSFERRED → RECOVERY), CRAH cooling
-- **Electrical topology**: Live SLD diagram — grid → transformer → UPS → PDU → halls
+- **Physics simulation**: UPS (NORMAL/BATTERY/BYPASS), generator ATS (STANDBY → STARTING → TRANSFERRED → RECOVERY, FAULT on start failure), CRAH setpoint driving rack inlet temperature and cooling energy
+- **Electrical topology**: Live SLD diagram — grid → transformer → UPS → PDU → halls, with power-flow animation and fault highlighting
 - **Multi-subsystem view**: Electrical · Fire Safety · Environment · Access Control
-- **Alarm management**: Active/Acknowledged/Cleared · Acknowledge and Clear (role-gated)
+- **Alarm management**: Active / Acknowledged / Cleared (history) · Acknowledge (any user) and Clear (ADMIN)
 - **Energy analytics**: 1H/6H/24H/7D range · PUE · IT load vs cooling breakdown
-- **Fault injection**: Trip CRAH, simulate mains loss, inject UPS overload (OPERATOR role)
-- **User management**: Add/remove accounts with role assignment (ADMIN only)
+- **Fault injection (ADMIN)**: mains loss, CRAH trip, rack overload, generator start failure — each fault expires after 60 s (max 120 s) and is shared by every viewer
+- **User directory (ADMIN)**: demo list of accounts; sign-in uses the two built-in demo users
 - **Dark/light theme**: Flash-free toggle · CSS design tokens
 - **Skeleton loaders**: KPI · Table · Chart skeletons while WebSocket connects
 
@@ -161,41 +163,47 @@ uvicorn api_service:app --reload --port 8000
 
 ## Modbus Interface
 
-Port `5020` (local/Docker only — disabled on Render).
+Port `5020` (local/Docker only — not started on Render). Holding registers, function code 3, unsigned 16-bit.
 
-| Slave | Device | Registers 0–5 |
+| Slave | Device | Registers |
 |---|---|---|
-| 1 | UPS | voltage, current, power, energy, power_factor, frequency |
-| 2 | PDU | voltage, current, power, energy, power_factor, frequency |
-| 3 | CRAH | inlet_temp, outlet_temp, cooling_capacity, fan_speed, power, set_point |
-| 4 | Generator | voltage, frequency, load_pct, fuel_level, run_hours, status |
+| 1 | UPS-01 | 0 input V ×10 · 1 output V ×10 · 2 load % ×10 · 3 battery % ×10 · 4 mode (0 NORMAL, 1 BATTERY, 2 BYPASS, 3 FAULT) |
+| 2 | PDU-A1 | 0 IT load kW ×10 · 1–3 phase A/B/C kW ×10 · 4 load % of rating ×10 |
+| 3 | CRAH | 0 supply °C ×10 · 1 return °C ×10 · 2 cooling kW ×10 · 3 fan % ×10 · 4 units online |
+| 4 | Generator | 0 state (0 STANDBY … 2 TRANSFERRED, 4 FAULT) · 1 output kW ×10 · 2 frequency Hz ×100 · 3 fuel % ×10 |
 
 ## Environment Variables
 
-| Variable | Required | Description |
+| Variable | Where | Description |
 |---|---|---|
-| `JWT_SECRET` | ✅ | Random string ≥ 32 chars — never commit this |
-| `DATABASE_URL` | ☐ | `postgresql+asyncpg://user:pass@host/db` — omit to use SQLite fallback |
-| `POSTGRES_PASSWORD` | ☐ | PostgreSQL password (Docker only) |
-| `CORS_ORIGINS` | ✅ | Comma-separated allowed origins |
-| `NEXT_PUBLIC_API_URL` | ✅ | FastAPI base URL seen from the browser |
-| `NEXT_PUBLIC_WS_URL` | ✅ | WebSocket URL (`ws://` or `wss://`) |
-| `MQTT_BROKER_HOST` | ☐ | Mosquitto host (optional) |
-| `INFLUXDB_URL` | ☐ | InfluxDB URL (optional time-series storage) |
+| `JWT_SECRET` | frontend **and** backend | ≥ 32 random chars, same value on both — Next.js signs the session token, FastAPI verifies it |
+| `DATABASE_URL` | backend | `postgresql+asyncpg://user:pass@host/db` — omit to use the SQLite fallback |
+| `POSTGRES_PASSWORD` | Docker | PostgreSQL password |
+| `CORS_ORIGINS` | backend | Comma-separated allowed origins |
+| `API_BASE_URL` | frontend | FastAPI URL the server-side proxy forwards to |
+| `NEXT_PUBLIC_WS_URL` | frontend | WebSocket URL (`ws://` or `wss://`) |
+| `MQTT_HOST` | backend | Mosquitto host (optional) |
+| `MODBUS_HOST` | backend | Modbus bind address (`0.0.0.0` in Docker) |
 
 ## CI
 
-GitHub Actions runs on every push:
+GitHub Actions runs on every push and pull request to `main`:
 
-- **python**: ruff lint, pytest, FastAPI startup check
-- **frontend**: TypeScript type-check (`tsc --noEmit`), Next.js build
-- **config**: `docker compose config` validates compose files
-- **e2e**: Playwright — login, dashboard KPIs, alarms, facility-map, settings
+- **Frontend**: `npm ci`, TypeScript type-check, Next.js production build
+- **API**: ruff lint, alarm-manager and electrical-model unit tests
+- **Simulation** / **Simulation E2E**: electrical model, generator state machine, full tick → alarm scenarios
+- **API Integration**: auth (JWT, roles), alarms, fault injection, users and Modbus against a live FastAPI app
+
+The Playwright suite in `apps/web/tests/e2e` runs locally (`npm run test:e2e`); it is not part of CI.
 
 ## Deploy
 
-See [`deploy/DEPLOY.md`](deploy/DEPLOY.md) for Render + Neon + Vercel.  
-Terraform for EC2 is in [`deploy/terraform/`](deploy/terraform/README.md).
+See [`deploy/DEPLOY.md`](deploy/DEPLOY.md) for Render + Neon + Vercel.
+[`deploy/terraform/`](deploy/terraform/README.md) is an EC2 reference configuration that has not been tested.
+
+> **Live demo on Render's free tier:** the backend sleeps after ~15 minutes idle, and the first
+> visit then waits for a cold start (often 30–60 s). The simulator, live alarms, faults and
+> chart history live in memory, so each wake-up starts from a fresh, healthy facility.
 
 ---
 

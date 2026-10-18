@@ -16,8 +16,9 @@ Browser ──► Vercel (Next.js) ──► Render (FastAPI) ──► Neon (Po
    └──────────── WebSocket (wss) ────────────┘
 ```
 
-> The repo also ships Terraform (AWS EC2 + ECS Fargate) and Kubernetes manifests for
-> self-hosted targets. This guide covers the managed path, which needs no servers.
+> For a single self-hosted VM, [`ec2-bootstrap.sh`](ec2-bootstrap.sh) builds the stack with
+> Docker Compose. [`terraform/`](terraform/README.md) is an untested EC2 reference.
+> This guide covers the managed path, which needs no servers.
 
 ---
 
@@ -67,13 +68,15 @@ Browser ──► Vercel (Next.js) ──► Render (FastAPI) ──► Neon (Po
 
    | Key | Value | Required |
    |---|---|---|
+   | `JWT_SECRET` | the secret from *Before you start* — **same value as on Vercel** | ✅ |
    | `DATABASE_URL` | the Neon string from Step 1 | ✅ |
    | `CORS_ORIGINS` | your Vercel URL (set after Step 3) | ✅ |
    | `API_KEY` | a random string, or leave unset | optional |
-   | `MQTT_HOST` / `MODBUS_PORT` | leave unset — defaults are fine | optional |
+   | `MQTT_HOST` | leave unset — the publisher is optional and non-fatal | optional |
 
-   The Modbus server (port 5020) and MQTT publisher start as background tasks; they are not
-   exposed by Render and the app runs normally without them.
+   FastAPI verifies the session token that Vercel signs, so `JWT_SECRET` must match exactly;
+   otherwise every action returns 401. The Modbus server is skipped on Render, and the MQTT
+   publisher runs without a broker.
 
 4. **Create Web Service**. When the deploy is green, copy the URL, e.g.
    `https://dc-north-01-api.onrender.com`.
@@ -83,8 +86,12 @@ Browser ──► Vercel (Next.js) ──► Render (FastAPI) ──► Neon (Po
    curl https://dc-north-01-api.onrender.com/health      # {"status":"ok","service":"api"}
    ```
 
-> Render's free tier sleeps after ~15 minutes idle; the first request afterwards takes a few
-> seconds to wake it. WebSockets are supported, so live telemetry works.
+> **Free tier sleeps.** Render stops the service after ~15 minutes without traffic. The first
+> request afterwards waits for a cold start (often 30–60 s), and because the simulator, live
+> alarms, injected faults, chart history and the demo user list are held in memory, every
+> wake-up starts from a fresh, healthy facility. Only the alarm history in Neon survives.
+> To keep a demo warm, ping `/health` every ~10 minutes from an external uptime monitor.
+> WebSockets are supported, so live telemetry works once awake.
 
 ---
 
@@ -104,7 +111,7 @@ Browser ──► Vercel (Next.js) ──► Render (FastAPI) ──► Neon (Po
    |---|---|---|
    | `API_BASE_URL` | `https://dc-north-01-api.onrender.com` | server-side proxy target (no `NEXT_PUBLIC_`) |
    | `NEXT_PUBLIC_WS_URL` | `wss://dc-north-01-api.onrender.com/ws/facility` | browser → backend WebSocket |
-   | `JWT_SECRET` | the secret from *Before you start* | signs the login cookie |
+   | `JWT_SECRET` | the secret from *Before you start* | signs the login cookie — must equal Render's |
    | `API_KEY` | same value as on Render | only if you set `API_KEY` on Render |
 
 4. **Deploy**. Copy the resulting URL, e.g. `https://dc-north-01.vercel.app`.
@@ -127,7 +134,9 @@ User accounts are defined in `apps/web/lib/auth/mock-auth.ts`:
 | Operator | `operator@datacenter.local` | `operator123` |
 
 **Change these before sharing the site publicly** — edit `mock-auth.ts`, commit, and redeploy.
-Admin can use the Controls page and manage users; Operator is read-only on controls.
+Admin can use Controls, inject faults and see the demo user directory; Operator monitors and
+acknowledges alarms (the Controls page is read-only for operators). Accounts added on the
+Users page are a demo list and cannot sign in.
 
 ---
 
@@ -140,9 +149,9 @@ Admin can use the Controls page and manage users; Operator is read-only on contr
 | `API_KEY` | Render + Vercel | Optional key for `/api/*` endpoints; must match on both |
 | `API_BASE_URL` | Vercel | Backend URL the Next.js proxy forwards to |
 | `NEXT_PUBLIC_WS_URL` | Vercel | WebSocket URL the browser connects to |
-| `JWT_SECRET` | Vercel | Signs/verifies the auth cookie |
+| `JWT_SECRET` | Vercel + Render | Vercel signs the session token, Render verifies it; must match |
 | `MQTT_HOST`, `MQTT_PORT` | Render | Optional MQTT broker (defaults to localhost, non-fatal) |
-| `MODBUS_PORT` | Render | Modbus TCP port (default 5020, internal only) |
+| `MODBUS_HOST`, `MODBUS_PORT` | Docker | Modbus TCP bind address/port (not started on Render) |
 
 ---
 
@@ -151,6 +160,8 @@ Admin can use the Controls page and manage users; Operator is read-only on contr
 | Symptom | Cause / fix |
 |---|---|
 | Login fails on Vercel | `JWT_SECRET` not set on Vercel, or differs between deploys |
+| Signed in, but every action returns 401 | `JWT_SECRET` on Render differs from Vercel |
+| Faults, alarms and charts reset | Render woke from sleep — in-memory state starts fresh (see Step 2) |
 | Dashboard loads but no live data | `NEXT_PUBLIC_WS_URL` must use `wss://` and end with `/ws/facility` |
 | API calls return 500 from the proxy | `API_BASE_URL` on Vercel is wrong or Render is asleep — retry after a few seconds |
 | Backend fails to start on Render | Check `DATABASE_URL`; paste the Neon string exactly |
@@ -176,4 +187,5 @@ make up                      # or: docker compose up --build
 | Prometheus | http://localhost:9090 |
 
 `docker-compose.prod.yml` adds a PostgreSQL service and MQTT authentication for a
-self-hosted production deployment.
+self-hosted production deployment; it refuses to start unless `JWT_SECRET` and
+`POSTGRES_PASSWORD` are set.
