@@ -67,3 +67,4 @@ htmlcov/
 .turbo/
 .vercel/
 apps/web/tsconfig.tsbuildinfo
+.claude/
