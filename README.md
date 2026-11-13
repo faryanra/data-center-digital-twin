@@ -1,6 +1,10 @@
 # DC-NORTH-01 — Data Center Digital Twin
 
 [![CI](https://github.com/faryanra/data-center-digital-twin/actions/workflows/ci.yml/badge.svg)](https://github.com/faryanra/data-center-digital-twin/actions/workflows/ci.yml)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel-black?logo=vercel)](https://data-center-digital-twin-eight.vercel.app)
+
+**[Live Demo →](https://data-center-digital-twin-eight.vercel.app)**  
+Login: `admin@datacenter.local` / `admin123`
 
 A real-time simulation and monitoring platform for a Tier-III data centre, built to demonstrate how digital-twin technology can support operations without requiring physical hardware.
 
@@ -201,9 +205,9 @@ The Playwright suite in `apps/web/tests/e2e` runs locally (`npm run test:e2e`); 
 See [`deploy/DEPLOY.md`](deploy/DEPLOY.md) for Render + Neon + Vercel.
 [`deploy/terraform/`](deploy/terraform/README.md) is an EC2 reference configuration that has not been tested.
 
-> **Live demo on Render's free tier:** the backend sleeps after ~15 minutes idle, and the first
-> visit then waits for a cold start (often 30–60 s). The simulator, live alarms, faults and
-> chart history live in memory, so each wake-up starts from a fresh, healthy facility.
+> **Live demo:** frontend on Vercel → [data-center-digital-twin-eight.vercel.app](https://data-center-digital-twin-eight.vercel.app) · backend on Render's free tier.
+> The backend sleeps after ~15 min idle; the first visit waits for a cold start (30–60 s).
+> Simulator state (alarms, faults, chart history) lives in memory and resets on each wake-up.
 
 ---
 
